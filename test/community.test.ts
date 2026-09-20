@@ -213,3 +213,30 @@ test("paused XP ingestion cannot block unlink cleanup polling", async () => {
     bot.store.close();
   }
 });
+
+test('guild verification publishes booster and equipped assets independently of role safety failures', async()=>{
+ const member={premiumSinceTimestamp:1700000000000,avatar:null,avatarDecorationData:{asset:'guild-decoration'},user:{avatar:'global-avatar',avatarDecorationData:{asset:'global-decoration'}},roles:{cache:new Map()}};
+ const client={guilds:{fetch:async()=>({members:{fetch:async()=>member,fetchMe:async()=>{throw new Error('role unavailable')}}})}} as unknown as Client;
+ const bot=new CommunityBot(client,'guild',{site:'https://hearthroom.club',key:'a'.repeat(64),databasePath:':memory:',channels:[],roles:[]},[]);
+ const calls:{op:string;value:Record<string,unknown>}[]=[];
+ bot.call=async<T>(op:string,value:Record<string,unknown>={})=>{calls.push({op,value});return(op==='projection'?{revision:'r',version:'link',linked:true}:{accepted:true}) as T;};
+ try {await bot.syncRoles('user');const sync=calls.find(c=>c.op==='appearance-sync');assert.ok(sync);assert.equal(sync.value.version,'link');assert.equal(sync.value.boostingSince,1700000000000);assert.equal(sync.value.avatar,'global-avatar');assert.equal(sync.value.guildDecoration,'guild-decoration');assert.equal(calls.find(c=>c.op==='ack')?.value.state,'failed');}finally{bot.store.close();}
+});
+test('temporary Discord failure never publishes a false booster revocation',async()=>{
+ const client={guilds:{fetch:async()=>{throw new Error('offline')}}} as unknown as Client;
+ const bot=new CommunityBot(client,'guild',{site:'https://hearthroom.club',key:'a'.repeat(64),databasePath:':memory:',channels:[],roles:[]},[]);
+ const calls:string[]=[];bot.call=async<T>(op:string)=>{calls.push(op);return(op==='projection'?{revision:'r',version:'link',linked:true}:{accepted:true}) as T;};
+ try{await bot.syncRoles('user');assert.equal(calls.includes('appearance-sync'),false);}finally{bot.store.close();}
+});
+test('confirmed Unknown Member revokes appearance but later role failures do not fabricate absence',async()=>{
+ const {DiscordAPIError}=await import('discord.js');
+ const unknown=Object.assign(Object.create(DiscordAPIError.prototype),{code:10007});
+ for(const found of [false,true]){
+  const member={premiumSinceTimestamp:null,avatar:null,avatarDecorationData:null,user:{avatar:null,avatarDecorationData:null}};
+  const client={guilds:{fetch:async()=>({members:{fetch:async()=>{if(!found)throw unknown;return member},fetchMe:async()=>{throw unknown}}})}} as unknown as Client;
+  const bot=new CommunityBot(client,'guild',{site:'https://hearthroom.club',key:'a'.repeat(64),databasePath:':memory:',channels:[],roles:[]},[]);
+  const observations:Record<string,unknown>[]=[];
+  bot.call=async<T>(op:string,value:Record<string,unknown>={})=>{if(op==='appearance-sync')observations.push(value);return (op==='projection'?{revision:'r',version:'link',linked:true}:{accepted:true}) as T;};
+  try{await bot.syncRoles('user');assert.equal(observations.length,1);assert.equal(observations[0]?.member,found);}finally{bot.store.close();}
+ }
+});

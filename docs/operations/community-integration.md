@@ -65,3 +65,23 @@ Release evidence must distinguish implementation from actual journeys: website c
 creation and supplementation, feedback discussion/rejection, unlink role cleanup and
 relink, and ordinary member A/B isolation. Never claim human isolation from an admin
 session or fabricate production awards/notifications to make a check green.
+
+## 0.7 supporter appearance
+
+The controller publishes verified guild boosting status (`premiumSinceTimestamp`),
+current global/guild avatars and equipped decoration asset hashes for active linked
+members. The existing signed HTTPS bridge and per-link version protect ownership.
+No new credential, inbound port, privileged intent or AI service is needed. Deploy
+HearthRoom migration 0029 and its appearance-sync endpoint before this Bot release.
+Linked subjects are periodically rechecked by the website pending queue (15 minutes),
+and the existing website sync action requests an earlier check.
+
+A successful member read publishes appearance before role safety operations; a role
+permission failure cannot revoke a confirmed boost. Unknown Member on that initial
+member read publishes absence; other Discord failures retain the last verified state.
+The website bounds stale entitlements to 24 hours, enforces public appearance consent,
+and keeps cosmetic preferences after entitlement loss. See the website's
+`docs/community-appearance.md` for API, media, privacy and rollback contracts.
+Existing `hearthkeeper_community_sync_total` records failures including bridge failures;
+no member, asset or Discord identifier is logged. MCP remains not applicable to these
+private member-session cosmetic choices.

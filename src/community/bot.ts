@@ -113,10 +113,19 @@ export class CommunityBot {
     const p = await this.call<Projection>("projection", { user });
     if (!p.revision) return;
     let state = "synced";
+    let memberVerified = false;
     try {
       const guild = await this.client.guilds.fetch(this.guild),
-        member = await guild.members.fetch({ user, force: true }),
-        bot = await guild.members.fetchMe();
+        member = await guild.members.fetch({ user, force: true });
+      memberVerified = true;
+      if (p.linked && p.version) await this.call("appearance-sync", {
+        user, version:p.version, observedAt:Date.now(), member:true,
+        boostingSince:member.premiumSinceTimestamp,
+        avatar:member.user.avatar, guildAvatar:member.avatar,
+        decoration:member.user.avatarDecorationData?.asset ?? null,
+        guildDecoration:member.avatarDecorationData?.asset ?? null,
+      });
+      const bot = await guild.members.fetchMe();
       const roles = await guild.roles.fetch(),
         channels = await guild.channels.fetch();
       const safety = this.config.roles.map((rule) => {
@@ -176,12 +185,16 @@ export class CommunityBot {
         throw new Error("role_readback");
     } catch (e) {
       state =
-        e instanceof DiscordAPIError && e.code === 10007
+        e instanceof DiscordAPIError && e.code === 10007 && !memberVerified
           ? "not_member"
           : e instanceof Error && e.message === "role_denied"
             ? "denied"
             : "failed";
     }
+    if (state === "not_member" && p.linked && p.version) await this.call("appearance-sync", {
+      user,version:p.version,observedAt:Date.now(),member:false,boostingSince:null,
+      avatar:null,guildAvatar:null,decoration:null,guildDecoration:null,
+    });
     await this.call("ack", { user, revision: p.revision, state });
     this.record(state);
   }
