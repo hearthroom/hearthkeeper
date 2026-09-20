@@ -23,10 +23,15 @@ function fixture() {
     edit: async (p: any) => Object.assign(thread, p),
     fetchStarterMessage: async () => ({
       author: { id: "app" },
-      edit: async () => {},
+      content: "",
+      embeds: [],
+      edit: async (p: any) => {
+        edited = p;
+      },
     }),
   };
   let created: any;
+  let edited: any;
   const forum: any = {
     id: "forum",
     type: 15,
@@ -59,6 +64,8 @@ function fixture() {
   );
   const c: any = {
     id: "case",
+    createdAt: Date.parse("2026-09-20T07:54:00Z"),
+    events: [{ seq: 1, kind: "submitted", body: "test", deliveryKey: "key" }],
     version: 1,
     title: "Test",
     category: "billing",
@@ -73,6 +80,9 @@ function fixture() {
     c,
     thread,
     forum,
+    get edited() {
+      return edited;
+    },
     get created() {
       return created;
     },
@@ -88,7 +98,8 @@ test("Discord posts retain category and replace lifecycle tag, with independent 
   } as any);
   assert.deepEqual(f.created.appliedTags, ["2", "7"]);
   assert.deepEqual(f.created.message.allowedMentions.roles, ["staff"]);
-  assert.equal(f.created.message.content, "<@&staff>");
+  assert.ok(f.created.message.content.endsWith("<@&staff>"));
+  assert.equal(f.created.message.flags, 4);
   await f.transport.sync({
     ...f.c,
     state: "waiting_member",
@@ -238,3 +249,70 @@ function messageWithoutBody(m: any) {
     author: m.author,
   };
 }
+
+test("forum titles use submitted titles and the first post starts with its original date and content", async () => {
+  const f = fixture();
+  await f.transport.createThread(f.c, f.c.events[0]);
+  assert.equal(f.created.name, "Test");
+  assert.equal(
+    f.created.message.content,
+    "2026-09-20 15:54（UTC+8）｜test\n\n<@&staff>",
+  );
+  f.thread.name = "HK-case";
+  await f.transport.sync({ ...f.c, archived: true, locked: true });
+  assert.equal(f.thread.name, "Test");
+  assert.equal(
+    f.edited.content,
+    "2026-09-20 15:54（UTC+8）｜test\n\n<@&staff>",
+  );
+  assert.equal(f.thread.archived, true);
+  assert.equal(f.thread.locked, true);
+});
+test("ambiguous creation recovery uses stored staff controls, not equal titles, and still recognizes legacy titles", async () => {
+  const { Collection } = await import("discord.js");
+  const f = fixture();
+  const make = (id: string, name: string, code: string, ownerId = "app") => ({
+    id,
+    name,
+    ownerId,
+    parentId: "forum",
+    fetchStarterMessage: async () => ({
+      author: { id: ownerId },
+      components: [{ components: [{ customId: "hk:act:" + code }] }],
+    }),
+  });
+  const wrong = make("wrong", "HK-case", "wrong");
+  const correct = make("correct", "Test", "expected");
+  (f.transport as any).store = {
+    hasStaffAction: (id: string, code: string) =>
+      id === "case" && code === "hk:act:expected",
+  };
+  f.forum.threads.fetchActive = async () => ({
+    threads: new Collection([
+      ["wrong", wrong],
+      ["foreign", make("foreign", "HK-case", "expected", "other")],
+    ]),
+  });
+  f.forum.threads.fetchArchived = async () => ({
+    threads: new Collection([["correct", correct]]),
+    hasMore: false,
+  });
+  assert.equal(await f.transport.findThread("case"), "correct");
+  f.forum.threads.fetchActive = async () => ({
+    threads: new Collection([["old", make("old", "HK-case", "expected")]]),
+  });
+  assert.equal(await f.transport.findThread("case"), "old");
+});
+
+test("plain starter preserves the longest accepted body without truncation or automatic link previews", async () => {
+  const f = fixture();
+  const body = "*".repeat(1350) + "https://example.test @everyone END";
+  await f.transport.createThread(f.c, { ...f.c.events[0], body });
+  assert.ok(f.created.message.content.includes(body));
+  assert.ok(f.created.message.content.length <= 2000);
+  assert.equal(f.created.message.flags, 4);
+  assert.deepEqual(f.created.message.allowedMentions, {
+    parse: [],
+    roles: ["staff"],
+  });
+});

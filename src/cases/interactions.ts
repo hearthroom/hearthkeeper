@@ -51,6 +51,18 @@ export const eventName = (kind: string, zh = true) =>
     restore: zh ? "恢復貼文" : "Restore post",
   })[kind] ?? kind;
 export function forumContent(c: CaseView, e: CaseView["events"][number]) {
+  if (e.seq === 1) {
+    const date = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Asia/Taipei",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(c.createdAt);
+    return `${date}（UTC+8）｜${e.body}${c.mode === "identified" ? `\n回報帳號：${c.reporter}` : ""}`;
+  }
   return `**HK-${c.id.slice(0, 8)} · ${eventName(e.kind)}**\n${clean(e.body)}${e.seq === 1 && c.mode === "identified" ? `\n回報帳號：${c.reporter}` : ""}\n\n\`hk:${e.deliveryKey}\``;
 }
 export class CaseInteractions {

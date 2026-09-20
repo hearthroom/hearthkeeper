@@ -534,3 +534,22 @@ test("staff can choose waiting, processing or waiting for technology; replies ad
     f.done();
   }
 });
+
+test("original creation time and persistent shared panel identity survive reopen and expired UI tokens", () => {
+  const f = fixture();
+  try {
+    const c = create(f.store);
+    assert.equal(c.createdAt, 1000000);
+    const token = f.store.action(staff, c.id, "staff_view", 1, true);
+    const ordinary = f.store.action(member, c.id, "view", 1);
+    assert.equal(f.store.hasStaffAction(c.id, "hk:act:" + token), true);
+    assert.equal(f.store.hasStaffAction(c.id, "hk:act:" + ordinary), false);
+    assert.equal(f.store.hasStaffAction("wrong", "hk:act:" + token), false);
+    f.tick(91 * 86400000);
+    assert.throws(() => f.store.resolve(staff, token), /expired/);
+    assert.equal(f.store.hasStaffAction(c.id, "hk:act:" + token), true);
+    assert.equal(f.store.read(member, c.id).createdAt, 1000000);
+  } finally {
+    f.done();
+  }
+});
