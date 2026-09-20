@@ -1,3 +1,9 @@
+import {
+  categories,
+  forumActions,
+  statusActions,
+  internalActions,
+} from "./catalog.js";
 import { DatabaseSync } from "node:sqlite";
 import {
   createHmac,
@@ -21,8 +27,20 @@ export type Action =
   | "supplement"
   | "request_close"
   | "request_reopen"
-  | "reject";
-export type State = "submitted" | "in_progress" | "waiting_member" | "closed";
+  | "reject"
+  | "archive"
+  | "lock"
+  | "archive_lock"
+  | "restore"
+  | "set_waiting"
+  | "set_processing"
+  | "wait_technical";
+export type State =
+  | "submitted"
+  | "in_progress"
+  | "waiting_member"
+  | "waiting_technical"
+  | "closed";
 export interface CaseEvent {
   seq: number;
   kind: string;
@@ -35,6 +53,9 @@ export interface CaseView {
   id: string;
   title: string;
   mode: "anonymous" | "identified";
+  category: string;
+  archived: boolean;
+  locked: boolean;
   state: State;
   version: number;
   threadId: string | null;
@@ -47,6 +68,9 @@ interface Row {
   id: string;
   title: string;
   mode: "anonymous" | "identified";
+  category: string;
+  archived: number;
+  locked: number;
   state: State;
   version: number;
   thread_id: string | null;
@@ -109,6 +133,19 @@ export class CaseStore {
     this.db
       .prepare("INSERT OR IGNORE INTO meta VALUES(?,?)")
       .run("key_check", fingerprint);
+    // Additive migration: preserve existing cases and their closed projection flags.
+    const columns = this.db.prepare("PRAGMA table_info(cases)").all() as {
+      name: string;
+    }[];
+    if (!columns.some((c) => c.name === "category"))
+      this.transaction(() => {
+        this.db.exec(
+          "ALTER TABLE cases ADD COLUMN category TEXT NOT NULL DEFAULT 'general'; ALTER TABLE cases ADD COLUMN archived INTEGER NOT NULL DEFAULT 0; ALTER TABLE cases ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;",
+        );
+        this.db.exec(
+          "UPDATE cases SET archived=1,locked=1 WHERE state='closed'",
+        );
+      });
     // Replay the independent deletion ledger before accepting interactions after restore.
     const ledger = options.path + ".deletions.jsonl";
     if (existsSync(ledger)) {
@@ -222,7 +259,12 @@ export class CaseStore {
   }
   create(
     a: Actor,
-    input: { title: string; body: string; mode: "anonymous" | "identified" },
+    input: {
+      title: string;
+      body: string;
+      mode: "anonymous" | "identified";
+      category?: string;
+    },
     requestKey: string,
   ) {
     return this.transaction(() => {
@@ -245,12 +287,18 @@ export class CaseStore {
       if (counts.latest !== null && this.now() - counts.latest < 60000)
         throw new CaseError("cooldown");
       if ((counts.opened ?? 0) >= 3) throw new CaseError("limit");
+      const category = input.category ?? "general";
+      if (category !== "general" && !categories.some((c) => c.id === category))
+        throw new CaseError("invalid");
       const id = token();
       this.db
         .prepare(
           "INSERT INTO cases(id,guild,title,mode,state,version,created_at) VALUES(?,?,?,?,?,?,?)",
         )
         .run(id, a.guildId, title, input.mode, "submitted", 1, this.now());
+      this.db
+        .prepare("UPDATE cases SET category=? WHERE id=?")
+        .run(category, id);
       this.db
         .prepare("INSERT INTO identities VALUES(?,?,?)")
         .run(id, owner, this.seal(a.userId));
@@ -290,6 +338,9 @@ export class CaseStore {
       id: r.id,
       title: r.title,
       mode: r.mode,
+      category: r.category,
+      archived: !!r.archived,
+      locked: !!r.locked,
       state: r.state,
       version: r.version,
       threadId: r.thread_id,
@@ -298,7 +349,9 @@ export class CaseStore {
         events.every((e) => e.status === "done")
           ? "synced"
           : "pending",
-      events,
+      events: includeIdentity
+        ? events
+        : events.filter((e) => !internalActions.includes(e.kind)),
       request: r.request,
     };
     if (includeIdentity && r.mode === "identified") {
@@ -311,6 +364,13 @@ export class CaseStore {
   }
   projection(id: string) {
     return this.view(id, true);
+  }
+  caseForThread(threadId: string): string | undefined {
+    return (
+      this.db
+        .prepare("SELECT id FROM cases WHERE thread_id=? AND guild=?")
+        .get(threadId, this.options.guildId) as { id: string } | undefined
+    )?.id;
   }
   act(
     a: Actor,
@@ -352,11 +412,34 @@ export class CaseStore {
       }
       if (kind !== "claim") body = this.text(body, 1400);
       else body = "";
+      let archived = !!r.archived,
+        locked = !!r.locked;
       let state = r.state,
         request = r.request;
-      if (kind === "supplement") {
+      if (forumActions.includes(kind)) {
+        if (r.state === "closed") throw new CaseError("closed");
+        if (kind === "archive") archived = true;
+        if (kind === "lock") locked = true;
+        if (kind === "archive_lock") {
+          archived = true;
+          locked = true;
+        }
+        if (kind === "restore") {
+          archived = false;
+          locked = false;
+        }
+      } else if (statusActions.includes(kind)) {
         if (state === "closed") throw new CaseError("closed");
-        state = "in_progress";
+        state =
+          kind === "set_waiting"
+            ? "submitted"
+            : kind === "wait_technical"
+              ? "waiting_technical"
+              : "in_progress";
+      } else if (kind === "supplement") {
+        if (state === "closed") throw new CaseError("closed");
+        // Member updates do not imply a moderator has started work.
+        if (state === "waiting_member") state = "submitted";
       } else if (kind === "request_close" || kind === "request_reopen") {
         if (request) throw new CaseError("pending");
         if ((kind === "request_reopen") !== (state === "closed"))
@@ -365,10 +448,14 @@ export class CaseStore {
       } else if (kind === "close") {
         if (state === "closed") throw new CaseError("closed");
         state = "closed";
+        archived = true;
+        locked = true;
         request = null;
       } else if (kind === "reopen") {
         if (state !== "closed") throw new CaseError("stale");
         state = "in_progress";
+        archived = false;
+        locked = false;
         request = null;
       } else if (kind === "reject") {
         if (!request) throw new CaseError("stale");
@@ -379,7 +466,8 @@ export class CaseStore {
           if (state !== "submitted") throw new CaseError("stale");
           state = "in_progress";
         } else if (kind === "request_info") state = "waiting_member";
-        else if (kind !== "reply") throw new CaseError("invalid");
+        else if (kind === "reply") state = "in_progress";
+        else throw new CaseError("invalid");
       }
       this.db
         .prepare(
@@ -391,6 +479,9 @@ export class CaseStore {
           state === "closed" ? (r.closed_at ?? this.now()) : null,
           id,
         );
+      this.db
+        .prepare("UPDATE cases SET archived=?,locked=? WHERE id=?")
+        .run(archived ? 1 : 0, locked ? 1 : 0, id);
       this.record(a, id, kind, body, r.version + 1, requestKey);
       return this.read(a, id);
     });

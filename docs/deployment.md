@@ -1,4 +1,4 @@
-# 部署 Hearthkeeper 0.2.0
+# 部署 Hearthkeeper 0.3.0
 
 這個版本提供 Discord 連線、一般回報處理與結案留檔，不執行管理處分。
 部署需要一台可持續運作、能透過 HTTPS／WebSocket 連出 Discord 的 Linux 主機。
@@ -7,7 +7,7 @@
 ## Discord 設定
 
 建立專用 Discord Application 與 Bot，僅啟用 Guild Install，使用 `bot` 與
-`applications.commands` scopes。0.2.0 不要求 Administrator、Manage Roles、
+`applications.commands` scopes。0.3.0 不要求 Administrator、Manage Roles、
 Moderate Members 或 Message Content／Presence／Server Members 特權 intents。
 指令回覆只對操作成員可見，不會自動發送私訊或張貼公告。
 
@@ -82,3 +82,18 @@ SIGTERM 會將 readiness 降為 0，關閉 HTTP 與 Discord 連線。
 
 保留期限、未知發送、加密及備份恢復邊界見 [0.2 設計](technical-design/Feedback_0.2.md)。
 目前提供 Prometheus endpoint，沒有自行修改主機的 scrape 或告警設定。
+
+## 0.3 分類與標籤設定
+
+在專用私人論壇預先建立以下十一個標籤（名稱須完全一致）：
+功能異常、儲值問題、帳號問題、角色卡錯誤、審核疑問、角色卡檢舉、🔵 等待中、⚪ 處理中、🟠 等待中（技術）、待補充、已結案。
+標籤可由管理員設定，bot 不需要管理頻道權限。更新前讀回既有標籤，保留其他用途的標籤。
+機器人管理自己的案件貼文標籤；手動加在這些案件上的其他標籤會在下次同步時移除。
+
+新案會提及 CASE_STAFF_ROLE_IDS 的角色。若角色未開放提及，僅在案件論壇授予 bot
+「提及 @everyone、@here 和所有身分組」權限；程式只允許指定社管角色被提及，
+禁止正文、所有人或任意成員觸發通知。缺少標籤或提及權限時，forum-ready 為 0 並停止外部同步。
+
+0.3 啟動會新增分類及貼文關閉／鎖定欄位。更新前建立一致的受限資料庫備份並保留原有金鑰，
+舊案件分類設為一般回報，已結案案件保留鎖定／封存。既有案件下次操作時才更新論壇標籤。
+回滾舊版不會刪除新增欄位，但舊版不理解獨立貼文狀態；重新上線前需核對案件投影。

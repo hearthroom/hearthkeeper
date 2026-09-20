@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
@@ -361,6 +362,174 @@ test("identifiable reports disclose only the explicit identified mode and never 
     f.tick();
     const anonymous = create(f.store, "anon");
     assert.equal(f.store.projection(anonymous.id).reporter, undefined);
+  } finally {
+    f.done();
+  }
+});
+
+test("forum controls are staff-only and do not silently mark a report resolved", () => {
+  const f = fixture();
+  try {
+    const c = create(f.store);
+    assert.throws(
+      () => f.store.act(member, c.id, 1, "archive", "organize", "x"),
+      /denied/,
+    );
+    const archived = f.store.act(staff, c.id, 1, "archive", "organize", "a");
+    assert.equal(archived.state, "submitted");
+    assert.equal(archived.archived, true);
+    assert.equal(archived.locked, false);
+    assert.ok(
+      !f.store.read(member, c.id).events.some((e) => e.body === "organize"),
+    );
+    const locked = f.store.act(staff, c.id, 2, "lock", "hold", "b");
+    assert.equal(locked.locked, true);
+    const restored = f.store.act(staff, c.id, 3, "restore", "resume", "c");
+    assert.equal(restored.archived, false);
+    assert.equal(restored.locked, false);
+    const both = f.store.act(staff, c.id, 4, "archive_lock", "hold", "d");
+    assert.equal(both.archived, true);
+    assert.equal(both.locked, true);
+    const closed = f.store.act(staff, c.id, 5, "close", "resolved", "e");
+    assert.equal(closed.state, "closed");
+    assert.throws(
+      () => f.store.act(staff, c.id, 6, "restore", "resume", "f"),
+      /closed/,
+    );
+  } finally {
+    f.done();
+  }
+});
+test("report category is validated, stored and survives status transitions", () => {
+  const f = fixture();
+  try {
+    const c = f.store.create(
+      member,
+      {
+        title: "Card issue",
+        body: "Details",
+        mode: "anonymous",
+        category: "card_report",
+      },
+      "cat",
+    );
+    assert.equal(c.category, "card_report");
+    const closed = f.store.act(staff, c.id, 1, "close", "Done", "close");
+    assert.equal(closed.category, "card_report");
+    f.tick();
+    assert.throws(
+      () =>
+        f.store.create(
+          member,
+          {
+            title: "Bad",
+            body: "Details",
+            mode: "anonymous",
+            category: "unknown",
+          },
+          "bad",
+        ),
+      /invalid/,
+    );
+  } finally {
+    f.done();
+  }
+});
+
+test("upgrade from the old schema preserves closed cases and encrypted ownership", () => {
+  const f = fixture();
+  try {
+    const c = create(f.store);
+    f.store.act(staff, c.id, 1, "close", "Resolved", "close");
+    f.store.close();
+    const db = new DatabaseSync(f.db);
+    db.exec(
+      "ALTER TABLE cases DROP COLUMN category; ALTER TABLE cases DROP COLUMN archived; ALTER TABLE cases DROP COLUMN locked;",
+    );
+    db.close();
+    const upgraded = new CaseStore({
+      path: f.db,
+      guildId: "g",
+      key,
+      lookupKey,
+    });
+    const restored = upgraded.read(member, c.id);
+    assert.equal(restored.category, "general");
+    assert.equal(restored.archived, true);
+    assert.equal(restored.locked, true);
+    assert.equal(restored.events.at(-1)?.body, "Resolved");
+    upgraded.close();
+  } finally {
+    f.done();
+  }
+});
+
+test("staff can choose waiting, processing or waiting for technology; replies advance status but member updates preserve the queue", () => {
+  const f = fixture();
+  try {
+    const c = create(f.store);
+    assert.throws(
+      () =>
+        f.store.act(
+          member,
+          c.id,
+          1,
+          "wait_technical" as any,
+          "Need help",
+          "denied",
+        ),
+      /denied/,
+    );
+    let current = f.store.act(
+      staff,
+      c.id,
+      1,
+      "wait_technical" as any,
+      "Need technical review",
+      "tech",
+    );
+    assert.equal(current.state, "waiting_technical");
+    current = f.store.act(
+      member,
+      c.id,
+      current.version,
+      "supplement",
+      "Extra details",
+      "extra",
+    );
+    assert.equal(current.state, "waiting_technical");
+    current = f.store.act(
+      staff,
+      c.id,
+      current.version,
+      "reply",
+      "Answer",
+      "answer",
+    );
+    assert.equal(current.state, "in_progress");
+    current = f.store.act(
+      staff,
+      c.id,
+      current.version,
+      "set_waiting" as any,
+      "Queued",
+      "queue",
+    );
+    assert.equal(current.state, "submitted");
+    current = f.store.act(
+      staff,
+      c.id,
+      current.version,
+      "set_processing" as any,
+      "Started",
+      "start",
+    );
+    assert.equal(current.state, "in_progress");
+    assert.ok(
+      !f.store
+        .read(member, c.id)
+        .events.some((e) => e.body === "Need technical review"),
+    );
   } finally {
     f.done();
   }

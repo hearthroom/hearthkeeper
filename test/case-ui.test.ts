@@ -140,3 +140,61 @@ test("member can read all of a long formatted report without truncation", async 
     f.done();
   }
 });
+test("default menu exposes exactly the six report categories and preserves choice through consent and modal", async () => {
+  const f = setup();
+  try {
+    const menu = interaction();
+    await f.ui.handle(menu);
+    const buttons = menu.replies[0].components.flatMap(
+      (r: any) => r.components,
+    );
+    assert.equal(
+      buttons.filter((b: any) => b.custom_id?.startsWith("hk:category:"))
+        .length,
+      6,
+    );
+    const choose = interaction("button", "hk:category:billing");
+    await f.ui.handle(choose);
+    assert.match(JSON.stringify(choose.replies), /hk:new:anonymous:billing/);
+    const modal = interaction("modal", "hk:create:anonymous:billing");
+    await f.ui.handle(modal);
+    assert.equal(
+      f.store.list({ guildId: "g", userId: "member", staff: false })[0]
+        ?.category,
+      "billing",
+    );
+  } finally {
+    f.done();
+  }
+});
+test("staff get a separate forum-management panel while ordinary members are denied", async () => {
+  const f = setup();
+  try {
+    const actor = { guildId: "g", userId: "member", staff: true };
+    const c = f.store.create(
+      actor,
+      { title: "Test", body: "Body", mode: "anonymous" },
+      "setup",
+    );
+    const code = f.store.action(actor, c.id, "staff_forum", 1, true);
+    const denied = interaction("button", "hk:act:" + code);
+    await f.ui.handle(denied);
+    assert.match(JSON.stringify(denied.replies), /權限/);
+    f.setStaff();
+    const allowed = interaction("button", "hk:act:" + code);
+    await f.ui.handle(allowed);
+    const output = JSON.stringify(allowed.replies);
+    for (const name of [
+      "關閉貼文",
+      "鎖定貼文",
+      "關閉並鎖定",
+      "恢復貼文",
+      "🔵 等待中",
+      "⚪ 處理中",
+      "🟠 等待中（技術）",
+    ])
+      assert.ok(output.includes(name));
+  } finally {
+    f.done();
+  }
+});

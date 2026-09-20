@@ -91,6 +91,15 @@ async function start() {
     }
   });
 
+  client.on(Events.MessageCreate, async (message) => {
+    try {
+      if (cases && (await cases.onStaffMessage(message))) void tick();
+    } catch {
+      runtime.recordDelivery("failure");
+      status("case_status_update_failed");
+    }
+  });
+
   const server = createHealthServer(runtime);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

@@ -1,3 +1,4 @@
+import { categories, caseTagNames, statusLabels } from "./catalog.js";
 import {
   Client,
   ChannelType,
@@ -27,7 +28,7 @@ export class DiscordCases implements Transport {
     private guildId: string,
     private appId: string,
     private config: CaseConfig,
-    store: CaseStore,
+    private store: CaseStore,
   ) {
     this.ui = new CaseInteractions(store, guildId, appId, (i) => this.actor(i));
   }
@@ -45,6 +46,32 @@ export class DiscordCases implements Transport {
         this.config.staffRoleIds.some((id) => member.roles.cache.has(id)),
     };
   }
+  async onStaffMessage(message: any) {
+    // Only metadata is used; never read, retain, or log message content/attachments.
+    if (
+      message.guildId !== this.guildId ||
+      message.author?.bot ||
+      message.webhookId ||
+      ![0, 19].includes(message.type) ||
+      message.channel?.parentId !== this.config.forumId
+    )
+      return false;
+    const caseId = this.store.caseForThread(message.channelId);
+    if (!caseId) return false;
+    const actor = await this.actor({ user: message.author });
+    if (!actor.staff) return false;
+    const c = this.store.read(actor, caseId);
+    if (c.state === "closed" || c.state === "in_progress") return false;
+    this.store.act(
+      actor,
+      c.id,
+      c.version,
+      "set_processing",
+      "社管已在案件貼文回覆。",
+      "message:" + message.id,
+    );
+    return true;
+  }
   private async forum() {
     const c = await this.client.channels.fetch(this.config.forumId, {
       force: true,
@@ -53,10 +80,30 @@ export class DiscordCases implements Transport {
       throw new Error("forum_invalid");
     return c as ForumChannel;
   }
+  private tags(f: ForumChannel, c: { category: string; state: string }) {
+    return caseTagNames(c.category, c.state).map((name) => {
+      const tag = f.availableTags.find((t) => t.name === name);
+      if (!tag) throw new Error("tags_missing");
+      return tag.id;
+    });
+  }
   async verify() {
     const f = await this.forum();
     await f.guild.roles.fetch();
     const me = await f.guild.members.fetchMe({ force: true });
+    // Validate before the outbox marks any send ambiguous.
+    for (const category of categories)
+      this.tags(f, { category: category.id, state: "submitted" });
+    for (const state of Object.keys(statusLabels))
+      this.tags(f, { category: "general", state });
+    const canMention = f.permissionsFor(me)?.has("MentionEveryone");
+    if (
+      !canMention &&
+      this.config.staffRoleIds.some(
+        (id) => !f.guild.roles.cache.get(id)?.mentionable,
+      )
+    )
+      throw new Error("staff_mentions_unavailable");
     if (
       !checkForumAccess({
         guildId: this.guildId,
@@ -114,10 +161,12 @@ export class DiscordCases implements Transport {
     const t = await f.threads.create({
       name: `HK-${c.id}`,
       autoArchiveDuration: 1440,
+      appliedTags: this.tags(f, c),
       message: {
+        content: this.config.staffRoleIds.map((id) => `<@&${id}>`).join(" "),
         embeds: [{ title: c.title, description: forumContent(c, e) }],
         components: this.ui.staffPanel(c),
-        allowedMentions: { parse: [] },
+        allowedMentions: { parse: [], roles: this.config.staffRoleIds },
       },
     });
     return t.id;
@@ -163,10 +212,15 @@ export class DiscordCases implements Transport {
       components: this.ui.staffPanel(c),
       allowedMentions: { parse: [] },
     });
-    const closed = c.state === "closed";
-    await t.edit({ locked: closed, archived: closed });
+    const appliedTags = this.tags(await this.forum(), c);
+    await t.edit({ locked: c.locked, archived: c.archived, appliedTags });
     const readback = await this.thread(t.id);
-    if (readback.locked !== closed || readback.archived !== closed)
+    if (
+      readback.locked !== c.locked ||
+      readback.archived !== c.archived ||
+      appliedTags.some((id) => !readback.appliedTags.includes(id)) ||
+      readback.appliedTags.length !== appliedTags.length
+    )
       throw new Error("state_readback_failed");
   }
   async remove(id: string) {
