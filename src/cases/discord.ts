@@ -1,4 +1,10 @@
-import { categories, caseTagNames, statusLabels } from "./catalog.js";
+import {
+  categories,
+  caseTagNames,
+  statusLabels,
+  statusEmojiNames,
+  type StatusCase,
+} from "./catalog.js";
 import {
   Client,
   ChannelType,
@@ -24,6 +30,11 @@ export interface CaseConfig {
 }
 export class DiscordCases implements Transport {
   readonly ui: CaseInteractions;
+  private emojis = new Map<
+    string,
+    { id: string; name: string; animated: boolean }
+  >();
+  private reconcileCursor = "";
   constructor(
     private client: Client,
     private guildId: string,
@@ -31,7 +42,13 @@ export class DiscordCases implements Transport {
     private config: CaseConfig,
     private store: CaseStore,
   ) {
-    this.ui = new CaseInteractions(store, guildId, appId, (i) => this.actor(i));
+    this.ui = new CaseInteractions(
+      store,
+      guildId,
+      appId,
+      (i) => this.actor(i),
+      (name) => this.emojis.get(name),
+    );
   }
   private async guild() {
     return await this.client.guilds.fetch(this.guildId);
@@ -62,7 +79,15 @@ export class DiscordCases implements Transport {
     const actor = await this.actor({ user: message.author });
     if (!actor.staff) return false;
     const c = this.store.read(actor, caseId);
-    if (c.state === "closed" || c.state === "in_progress") return false;
+    if (
+      [
+        "closed",
+        "in_progress",
+        "waiting_technical",
+        "under_discussion",
+      ].includes(c.state)
+    )
+      return false;
     this.store.act(
       actor,
       c.id,
@@ -73,6 +98,45 @@ export class DiscordCases implements Transport {
     );
     return true;
   }
+  async onThreadUpdate(event: {
+    id: string;
+    guildId: string;
+    parentId: string | null;
+  }) {
+    if (
+      event.guildId !== this.guildId ||
+      event.parentId !== this.config.forumId
+    )
+      return false;
+    const id = this.store.caseForThread(event.id);
+    if (!id) return false;
+    const c = this.store.projection(id);
+    // Our worker always writes while a projection is pending. Ignore its temporary unlocks.
+    if (c.sync !== "synced") return false;
+    const current = await this.thread(event.id);
+    return this.store.observeThread(id, c.version, {
+      archived: !!current.archived,
+      locked: !!current.locked,
+    });
+  }
+  async reconcileThreads() {
+    const batch = this.store.settledThreads(this.reconcileCursor);
+    let failed = false;
+    for (const c of batch) {
+      this.reconcileCursor = c.id;
+      try {
+        await this.onThreadUpdate({
+          id: c.threadId!,
+          guildId: this.guildId,
+          parentId: this.config.forumId,
+        });
+      } catch {
+        failed = true;
+      }
+    }
+    if (batch.length < 20) this.reconcileCursor = "";
+    if (failed) throw new Error("thread_reconcile_failed");
+  }
   private async forum() {
     const c = await this.client.channels.fetch(this.config.forumId, {
       force: true,
@@ -81,8 +145,8 @@ export class DiscordCases implements Transport {
       throw new Error("forum_invalid");
     return c as ForumChannel;
   }
-  private tags(f: ForumChannel, c: { category: string; state: string }) {
-    return caseTagNames(c.category, c.state).map((name) => {
+  private tags(f: ForumChannel, c: StatusCase) {
+    return caseTagNames(c.category, c.state, c).map((name) => {
       const tag = f.availableTags.find((t) => t.name === name);
       if (!tag) throw new Error("tags_missing");
       return tag.id;
@@ -92,11 +156,33 @@ export class DiscordCases implements Transport {
     const f = await this.forum();
     await f.guild.roles.fetch();
     const me = await f.guild.members.fetchMe({ force: true });
+    const emojis = await f.guild.emojis.fetch();
+    const resolved = new Map<
+      string,
+      { id: string; name: string; animated: boolean }
+    >();
+    for (const [state, name] of Object.entries(statusEmojiNames)) {
+      const matches = emojis.filter(
+        (e) =>
+          e.name === name &&
+          e.available &&
+          (!e.roles.cache.size ||
+            e.roles.cache.some((r) => me.roles.cache.has(r.id))),
+      );
+      if (matches.size !== 1) throw new Error("status_emoji_unavailable");
+      const emoji = matches.first()!;
+      const tag = f.availableTags.find((t) => t.name === statusLabels[state]);
+      if (!tag || tag.emoji?.id !== emoji.id)
+        throw new Error("status_tag_emoji_mismatch");
+      resolved.set(name, { id: emoji.id, name, animated: !!emoji.animated });
+    }
+    this.emojis = resolved;
     // Validate before the outbox marks any send ambiguous.
     for (const category of categories)
       this.tags(f, { category: category.id, state: "submitted" });
-    for (const state of Object.keys(statusLabels))
-      this.tags(f, { category: "general", state });
+    for (const name of Object.values(statusLabels))
+      if (!f.availableTags.some((t) => t.name === name))
+        throw new Error("tags_missing");
     const canMention = f.permissionsFor(me)?.has("MentionEveryone");
     if (
       !canMention &&

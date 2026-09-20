@@ -5,11 +5,15 @@ import { categories } from "../src/cases/catalog.js";
 function fixture() {
   const tags = [
     ...categories.map((c) => c.zh),
-    "🔵 等待中",
-    "⚪ 處理中",
-    "🟠 等待中（技術）",
+    "等待中",
+    "處理中",
+    "等待中（技術）",
     "待補充",
     "已結案",
+    "暫停處理",
+    "討論中",
+    "PASS",
+    "未採納",
   ].map((name, i) => ({ name, id: String(i + 1) }));
   const thread: any = {
     id: "thread",
@@ -315,4 +319,103 @@ test("plain starter preserves the longest accepted body without truncation or au
     parse: [],
     roles: ["staff"],
   });
+});
+
+test("external thread changes use fresh state and ignore pending bot writes, foreign and untracked threads", async () => {
+  const f = fixture();
+  let pending = false;
+  let observed: any;
+  let reads = 0;
+  const c = { ...f.c, sync: "synced" };
+  (f.transport as any).store = {
+    caseForThread: (id: string) => (id === "thread" ? "case" : undefined),
+    projection: () => ({ ...c, sync: pending ? "pending" : "synced" }),
+    observeThread: (_id: string, _v: number, flags: any) => {
+      observed = flags;
+      return true;
+    },
+  };
+  (f.transport as any).client.channels.fetch = async () => {
+    reads++;
+    return f.thread;
+  };
+  const event = {
+    id: "thread",
+    guildId: "g",
+    parentId: "forum",
+    locked: true,
+    archived: true,
+  };
+  assert.equal(
+    await f.transport.onThreadUpdate({ ...event, guildId: "other" }),
+    false,
+  );
+  assert.equal(
+    await f.transport.onThreadUpdate({ ...event, id: "unknown" }),
+    false,
+  );
+  pending = true;
+  assert.equal(await f.transport.onThreadUpdate(event), false);
+  assert.equal(reads, 0);
+  pending = false;
+  assert.equal(await f.transport.onThreadUpdate(event), true);
+  assert.deepEqual(observed, { locked: false, archived: false });
+});
+
+test("preflight requires each uploaded emoji and matching forum tag before exposing controls", async () => {
+  const { Collection } = await import("discord.js");
+  const { statusEmojiNames, statusLabels } = await import(
+    "../src/cases/catalog.js"
+  );
+  const { requiredBotPermissions } = await import("../src/cases/policy.js");
+  const f = fixture();
+  const emojis = new Collection(
+    Object.entries(statusEmojiNames).map(([state, name], n) => {
+      const id = String(100 + n);
+      f.forum.availableTags.find(
+        (t: any) => t.name === statusLabels[state],
+      ).emoji = { id };
+      return [
+        id,
+        {
+          id,
+          name,
+          available: true,
+          animated: false,
+          roles: { cache: new Collection() },
+        },
+      ] as const;
+    }),
+  );
+  f.forum.guild = {
+    roles: { fetch: async () => {}, cache: new Collection() },
+    members: {
+      fetchMe: async () => ({ id: "app", roles: { cache: new Collection() } }),
+    },
+    emojis: { fetch: async () => emojis },
+  };
+  f.forum.permissionsFor = () => ({
+    has: () => true,
+    bitfield: requiredBotPermissions,
+  });
+  f.forum.permissionOverwrites = {
+    cache: new Collection([
+      [
+        "g",
+        {
+          id: "g",
+          type: 0,
+          allow: { bitfield: 0n },
+          deny: { bitfield: 1024n },
+        },
+      ],
+    ]),
+  };
+  await f.transport.verify();
+  const waiting = f.forum.availableTags.find((t: any) => t.name === "等待中");
+  waiting.emoji = { id: "wrong" };
+  await assert.rejects(() => f.transport.verify(), /status_tag_emoji_mismatch/);
+  waiting.emoji = { id: "100" };
+  (emojis.get("100")! as { available: boolean }).available = false;
+  await assert.rejects(() => f.transport.verify(), /status_emoji_unavailable/);
 });

@@ -189,12 +189,52 @@ test("staff get a separate forum-management panel while ordinary members are den
       "鎖定貼文",
       "關閉並鎖定",
       "恢復貼文",
-      "🔵 等待中",
-      "⚪ 處理中",
-      "🟠 等待中（技術）",
+      "等待中",
+      "處理中",
+      "等待中（技術）",
     ])
       assert.ok(output.includes(name));
   } finally {
     f.done();
+  }
+});
+
+test("second panel follows case kind and uses guild emoji payloads with explicit terminal effects", async () => {
+  for (const category of ["bug", "review"]) {
+    const f = setup();
+    try {
+      f.setStaff();
+      const actor = { guildId: "g", userId: "member", staff: true };
+      const c = f.store.create(
+        actor,
+        { title: "Synthetic", body: "Test", mode: "anonymous", category },
+        "setup",
+      );
+      const ui = new CaseInteractions(
+        f.store,
+        "g",
+        "app",
+        async () => actor,
+        (name: string) => ({ id: "emoji-" + name, name }),
+      );
+      const code = f.store.action(actor, c.id, "staff_forum", 1, true);
+      const i = interaction("button", "hk:act:" + code);
+      await ui.handle(i);
+      const panel = i.replies.at(-1);
+      const buttons = panel.components.flatMap((r: any) => r.components);
+      const actions = buttons.map(
+        (b: any) => f.store.resolve(actor, b.custom_id.slice(7)).action,
+      );
+      assert.ok(actions.includes("pass"));
+      assert.equal(actions.includes("not_adopted"), category === "review");
+      assert.equal(actions.includes("discuss"), category === "review");
+      assert.equal(actions.includes("wait_technical"), category === "bug");
+      assert.match(panel.content, /自動關閉並鎖定/);
+      assert.ok(buttons.some((b: any) => b.emoji?.name === "Passed"));
+      assert.ok(buttons.some((b: any) => b.emoji?.name === "Waiting"));
+      assert.ok(panel.components.every((r: any) => r.components.length <= 5));
+    } finally {
+      f.done();
+    }
   }
 });

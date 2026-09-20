@@ -3,6 +3,12 @@ import {
   categoryName,
   forumActions,
   statusActions,
+  decisionActions,
+  actionsFor,
+  caseStatus,
+  workflowKind,
+  actionStatus,
+  statusEmojiNames,
 } from "./catalog.js";
 import {
   CaseStore,
@@ -24,9 +30,13 @@ const clean = (s: string) =>
     .replace(/https?:\/\/[^\s]+/g, (m) => `<${m}>`);
 export const stateName = (state: string, zh = true) =>
   ({
-    submitted: zh ? "🔵 等待中" : "🔵 Waiting",
-    in_progress: zh ? "⚪ 處理中" : "⚪ In progress",
-    waiting_technical: zh ? "🟠 等待中（技術）" : "🟠 Waiting for technology",
+    submitted: zh ? "等待中" : "Waiting",
+    in_progress: zh ? "處理中" : "In progress",
+    waiting_technical: zh ? "等待中（技術）" : "Waiting for technology",
+    under_discussion: zh ? "討論中" : "Under discussion",
+    paused: zh ? "暫停處理" : "Paused",
+    passed: "PASS",
+    not_adopted: zh ? "未採納" : "Not adopted",
     waiting_member: zh ? "待補充" : "Waiting for you",
     closed: zh ? "已結案" : "Closed",
   })[state] ?? state;
@@ -45,9 +55,13 @@ export const eventName = (kind: string, zh = true) =>
     archive: zh ? "關閉貼文" : "Close post",
     lock: zh ? "鎖定貼文" : "Lock post",
     archive_lock: zh ? "關閉並鎖定" : "Close and lock",
-    set_waiting: zh ? "🔵 等待中" : "🔵 Waiting",
-    set_processing: zh ? "⚪ 處理中" : "⚪ In progress",
-    wait_technical: zh ? "🟠 等待中（技術）" : "🟠 Waiting for technology",
+    set_waiting: zh ? "等待中" : "Waiting",
+    set_processing: zh ? "處理中" : "In progress",
+    wait_technical: zh ? "等待中（技術）" : "Waiting for technology",
+    discuss: zh ? "討論中" : "Discuss",
+    pass: zh ? "PASS・關閉並鎖定" : "PASS · close and lock",
+    not_adopted: zh ? "未採納・關閉並鎖定" : "Not adopted · close and lock",
+    thread_state: zh ? "Discord 貼文狀態更新" : "Discord post state updated",
     restore: zh ? "恢復貼文" : "Restore post",
   })[kind] ?? kind;
 export function forumContent(c: CaseView, e: CaseView["events"][number]) {
@@ -71,6 +85,10 @@ export class CaseInteractions {
     private guildId: string,
     private appId: string,
     private actor: (interaction: any) => Promise<Actor>,
+    private emoji: (
+      name: string,
+    ) => { id: string; name: string; animated?: boolean } | undefined = () =>
+      undefined,
   ) {}
   private payload(content: string, components: any[] = []) {
     return { content, components, allowedMentions: { parse: [] }, flags: 64 };
@@ -93,13 +111,32 @@ export class CaseInteractions {
       ]),
     ];
   }
+  private statusName(c: CaseView, zh: boolean) {
+    const state = caseStatus(c),
+      emoji = this.emoji(statusEmojiNames[state]!);
+    return `${emoji ? `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}> ` : ""}${stateName(state, zh)}`;
+  }
+  private statusButton(a: Actor, c: CaseView, kind: string, zh: boolean) {
+    const emoji =
+      kind === "lock" && workflowKind(c.category) === "problem"
+        ? undefined
+        : this.emoji(statusEmojiNames[actionStatus[kind]!]!);
+    return {
+      ...button(
+        eventName(kind, zh),
+        this.code(a, c, kind),
+        kind === "pass" ? 3 : kind === "not_adopted" ? 4 : 2,
+      ),
+      ...(emoji ? { emoji } : {}),
+    };
+  }
   private menu(zh: boolean) {
     return this.payload(
       zh
-        ? "**爐邊管家**\n選擇分類提出回報。回報會由社管處理，進度與回覆可在「我的回報」查看。"
-        : "**Hearthkeeper**\nModerators handle your reports. Check My reports for updates.",
+        ? "**爐邊管家**\n選擇分類提出回報。\n問題：功能異常、儲值、帳號、角色卡錯誤。\n回饋：審核疑問、角色卡檢舉。\n回報會由社管處理，進度與回覆可在「我的回報」查看。"
+        : "**Hearthkeeper**\nProblems: bugs, top-ups, accounts and card errors. Feedback: review questions and card reports. Moderators handle your reports. Check My reports for updates.",
       [
-        ...[categories.slice(0, 3), categories.slice(3)].map((group) =>
+        ...[categories.slice(0, 4), categories.slice(4)].map((group) =>
           row(
             group.map((c) =>
               button(zh ? c.zh : c.en, "hk:category:" + c.id, 1),
@@ -154,20 +191,25 @@ export class CaseInteractions {
       i,
       this.payload(
         zh
-          ? `**貼文管理**\n${stateName(c.state, zh)}\n${c.archived ? "已關閉" : "開啟中"} · ${c.locked ? "已鎖定" : "未鎖定"}\n關閉會封存貼文；鎖定限制一般成員重新開啟，不會讓開啟中的貼文停止收訊。這些操作不會結案。已結案案件須先重開案件。`
-          : `**Post management**\n${stateName(c.state, zh)}\n${c.archived ? "Closed" : "Open"} · ${c.locked ? "Locked" : "Unlocked"}\nClosing archives the post. Locking restricts reopening; it does not stop replies in an active post. These actions do not resolve the case. Reopen a resolved case first.`,
-        [
-          row(
-            statusActions.map((kind) =>
-              button(eventName(kind, zh), this.code(a, c, kind)),
-            ),
-          ),
-          row(
-            forumActions.map((kind) =>
-              button(eventName(kind, zh), this.code(a, c, kind)),
-            ),
-          ),
-        ],
+          ? `**貼文管理・${workflowKind(c.category) === "feedback" ? "回饋" : "問題"}**\n${this.statusName(c, zh)}\n${c.archived ? "已關閉" : "開啟中"} · ${c.locked ? "已鎖定" : "未鎖定"}\n關閉會封存貼文；鎖定限制一般成員重新開啟，不會讓開啟中的貼文停止收訊。一般貼文操作不會結案；未完成時鎖定${workflowKind(c.category) === "problem" ? "並關閉" : ""}會顯示黃色。PASS${workflowKind(c.category) === "feedback" ? " 或未採納" : ""}會自動關閉並鎖定。已結案案件須先重開案件。`
+          : `**Post management**\n${this.statusName(c, zh)}\n${c.archived ? "Closed" : "Open"} · ${c.locked ? "Locked" : "Unlocked"}\nClosing archives the post. Locking restricts reopening; it does not stop replies in an active post. Post controls do not resolve the case. PASS / Not adopted close and lock automatically. Reopen a resolved case first.`,
+        c.state === "closed"
+          ? [
+              row([
+                button(
+                  zh ? "重開案件" : "Reopen case",
+                  this.code(a, c, "reopen"),
+                ),
+              ]),
+            ]
+          : [
+              row(
+                actionsFor(c).map((kind) => this.statusButton(a, c, kind, zh)),
+              ),
+              row(
+                forumActions.map((kind) => this.statusButton(a, c, kind, zh)),
+              ),
+            ],
       ),
     );
   }
@@ -225,10 +267,7 @@ export class CaseInteractions {
     const rows = cases.map((c) =>
       row([
         button(
-          `HK-${c.id.slice(0, 8)} · ${stateName(c.state, zh)} · ${c.title}`.slice(
-            0,
-            80,
-          ),
+          `${stateName(caseStatus(c), zh)} · ${c.title}`.slice(0, 80),
           this.code(a, c, a.staff ? "staff_view" : "view"),
         ),
       ]),
@@ -266,7 +305,7 @@ export class CaseInteractions {
       Math.min(page ?? c.events.length - 1, c.events.length - 1),
     );
     const event = c.events[index]!;
-    let content = `**HK-${c.id.slice(0, 8)} · ${clean(c.title)}**\n${categoryName(c.category, zh)} · ${stateName(c.state, zh)} · ${c.mode === "anonymous" ? (zh ? "匿名" : "Anonymous") : zh ? "私密" : "Identified"}${c.sync === "pending" ? (zh ? " · 論壇同步待處理" : " · Forum sync pending") : ""}\n\n**${eventName(event.kind, zh)} (${index + 1}/${c.events.length})**\n${clean(event.body)}`;
+    let content = `**HK-${c.id.slice(0, 8)} · ${clean(c.title)}**\n${categoryName(c.category, zh)} · ${this.statusName(c, zh)} · ${c.mode === "anonymous" ? (zh ? "匿名" : "Anonymous") : zh ? "私密" : "Identified"}${c.sync === "pending" ? (zh ? " · 論壇同步待處理" : " · Forum sync pending") : ""}\n\n**${eventName(event.kind, zh)} (${index + 1}/${c.events.length})**\n${clean(event.body)}`;
     if (c.request)
       content +=
         "\n\n" +
@@ -295,7 +334,6 @@ export class CaseInteractions {
         if (c.state === "submitted") add("認領", "Claim", "claim");
         add("回覆成員", "Reply", "reply", 1);
         add("要求補充", "Request details", "request_info");
-        add("結案留檔", "Close case", "close", 4);
       }
       if (c.request) add("拒絕申請", "Decline request", "reject");
     } else {
@@ -429,6 +467,7 @@ export class CaseInteractions {
           "reject",
           ...forumActions,
           ...statusActions,
+          ...decisionActions,
         ].includes(action.action);
       actor = { ...actor, staff: staffAction && actor.staff };
       if (staffAction && !actor.staff) throw new CaseError("denied");
