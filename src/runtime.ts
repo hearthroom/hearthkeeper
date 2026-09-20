@@ -6,7 +6,7 @@ import {
 } from "discord.js";
 import type { Config } from "./config.js";
 
-export const gatewayIntents = [GatewayIntentBits.Guilds];
+export const gatewayIntents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
 export const commandDefinitions = [
   {
     name: "hearthkeeper",

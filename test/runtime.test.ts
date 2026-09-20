@@ -24,8 +24,8 @@ test('configuration requires explicit app, guild and token without exposing valu
   assert.equal(loadConfig(env).metricsHost, '127.0.0.1');
 });
 
-test('commands use only Guilds intent and include the delivered report workflow', () => {
-  assert.deepEqual(gatewayIntents, [GatewayIntentBits.Guilds]);
+test('commands use non-privileged Guilds and GuildMessages intents and include the delivered report workflow', () => {
+  assert.deepEqual(gatewayIntents, [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]);
   assert.deepEqual(commandDefinitions.map(x => x.name), ['hearthkeeper','feedback','myreports','cases','ping']);
   assert.ok(commandDefinitions.every(x => x.dm_permission === false));
 });
