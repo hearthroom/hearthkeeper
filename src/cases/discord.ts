@@ -2,6 +2,7 @@ import { categories, caseTagNames, statusLabels } from "./catalog.js";
 import {
   Client,
   ChannelType,
+  MessageFlags,
   type ForumChannel,
   type ThreadChannel,
 } from "discord.js";
@@ -135,11 +136,25 @@ export class DiscordCases implements Transport {
   }
   async findThread(id: string) {
     const f = await this.forum();
-    const match = (t: ThreadChannel) =>
-      t.name === `HK-${id}` && t.ownerId === this.appId && t.parentId === f.id;
+    const match = async (t: ThreadChannel) => {
+      if (t.ownerId !== this.appId || t.parentId !== f.id) return false;
+      const starter = await t.fetchStarterMessage();
+      return (
+        starter?.author.id === this.appId &&
+        starter.components.some(
+          (row) =>
+            "components" in row &&
+            row.components.some(
+              (component) =>
+                "customId" in component &&
+                typeof component.customId === "string" &&
+                this.store.hasStaffAction(id, component.customId),
+            ),
+        )
+      );
+    };
     const active = await f.threads.fetchActive();
-    const found = active.threads.find(match);
-    if (found) return found.id;
+    for (const t of active.threads.values()) if (await match(t)) return t.id;
     let before: Date | undefined;
     for (let page = 0; page < 20; page++) {
       const result = await f.threads.fetchArchived({
@@ -147,8 +162,7 @@ export class DiscordCases implements Transport {
         limit: 100,
         ...(before ? { before } : {}),
       });
-      const found = result.threads.find(match);
-      if (found) return found.id;
+      for (const t of result.threads.values()) if (await match(t)) return t.id;
       if (!result.hasMore) return null;
       const last = result.threads.last();
       if (!last?.archiveTimestamp) throw new Error("readback_incomplete");
@@ -156,15 +170,22 @@ export class DiscordCases implements Transport {
     }
     throw new Error("readback_incomplete");
   }
+  private starterContent(c: CaseView, e: CaseEvent) {
+    return (
+      forumContent(c, e) +
+      "\n\n" +
+      this.config.staffRoleIds.map((id) => `<@&${id}>`).join(" ")
+    );
+  }
   async createThread(c: CaseView, e: CaseEvent) {
     const f = await this.forum();
     const t = await f.threads.create({
-      name: `HK-${c.id}`,
+      name: c.title,
       autoArchiveDuration: 1440,
       appliedTags: this.tags(f, c),
       message: {
-        content: this.config.staffRoleIds.map((id) => `<@&${id}>`).join(" "),
-        embeds: [{ title: c.title, description: forumContent(c, e) }],
+        content: this.starterContent(c, e),
+        flags: MessageFlags.SuppressEmbeds,
         components: this.ui.staffPanel(c),
         allowedMentions: { parse: [], roles: this.config.staffRoleIds },
       },
@@ -208,14 +229,24 @@ export class DiscordCases implements Transport {
     const starter = await t.fetchStarterMessage();
     if (!starter || starter.author.id !== this.appId)
       throw new Error("starter_missing");
+    const content = this.starterContent(c, c.events[0]!);
     await starter.edit({
+      ...(starter.content !== content || starter.embeds.length
+        ? { content, embeds: [], flags: MessageFlags.SuppressEmbeds }
+        : {}),
       components: this.ui.staffPanel(c),
       allowedMentions: { parse: [] },
     });
     const appliedTags = this.tags(await this.forum(), c);
-    await t.edit({ locked: c.locked, archived: c.archived, appliedTags });
+    await t.edit({
+      name: c.title,
+      locked: c.locked,
+      archived: c.archived,
+      appliedTags,
+    });
     const readback = await this.thread(t.id);
     if (
+      readback.name !== c.title ||
       readback.locked !== c.locked ||
       readback.archived !== c.archived ||
       appliedTags.some((id) => !readback.appliedTags.includes(id)) ||

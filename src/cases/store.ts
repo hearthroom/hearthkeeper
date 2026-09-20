@@ -51,6 +51,7 @@ export interface CaseEvent {
 }
 export interface CaseView {
   id: string;
+  createdAt: number;
   title: string;
   mode: "anonymous" | "identified";
   category: string;
@@ -66,6 +67,7 @@ export interface CaseView {
 }
 interface Row {
   id: string;
+  created_at: number;
   title: string;
   mode: "anonymous" | "identified";
   category: string;
@@ -336,6 +338,7 @@ export class CaseStore {
       .all(id) as unknown as CaseEvent[];
     const c: CaseView = {
       id: r.id,
+      createdAt: r.created_at,
       title: r.title,
       mode: r.mode,
       category: r.category,
@@ -508,6 +511,18 @@ export class CaseStore {
         sharedStaff ? 1 : 0,
       );
     return code;
+  }
+  // Identity proof for bot-owned starter messages, not an authorization check.
+  // Expired controls remain useful for recovering an interrupted create.
+  hasStaffAction(caseId: string, customId: string) {
+    if (!customId.startsWith("hk:act:")) return false;
+    return Boolean(
+      this.db
+        .prepare(
+          "SELECT 1 FROM actions WHERE token=? AND case_id=? AND staff=1 AND actor_key IS NULL AND action IN ('staff_view','staff_forum')",
+        )
+        .get(customId.slice(7), caseId),
+    );
   }
   resolve(a: Actor, code: string) {
     const actor = this.actor(a),
