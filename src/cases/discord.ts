@@ -43,6 +43,7 @@ export class DiscordCases implements Transport {
     private appId: string,
     private config: CaseConfig,
     private store: CaseStore,
+    observe?: (kind: "command" | "button" | "modal", outcome: "success" | "failure" | "denied") => void,
   ) {
     this.ui = new CaseInteractions(
       store,
@@ -51,6 +52,7 @@ export class DiscordCases implements Transport {
       (i) => this.actor(i),
       (name) => this.emojis.get(name),
       config.privateParentId,
+      observe,
     );
   }
   private async guild() {

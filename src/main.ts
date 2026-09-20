@@ -32,6 +32,7 @@ async function start() {
           config.applicationId,
           config.cases,
           store,
+          runtime.recordCaseInteraction,
         )
       : undefined;
   const worker =

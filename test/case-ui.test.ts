@@ -286,3 +286,62 @@ test("configured private reports are primary, queue a conversation and reveal on
     f.done();
   }
 });
+
+test("archived-thread modal updates its private panel without creating a new thread reply", async () => {
+  const f = setup();
+  try {
+    f.setStaff();
+    const actor = { guildId: "g", userId: "member", staff: true };
+    const c = f.store.create(actor, {title:"Fixture",body:"Test",mode:"anonymous"}, "create");
+    const closed = f.store.act(actor,c.id,c.version,"close","Test complete","close");
+    const code = f.store.action(actor,c.id,"reopen",closed.version);
+    const i = {
+      ...interaction("modal", "hk:submit:" + code),
+      isFromMessage: () => true,
+      message: {flags:{has:(flag:number)=>flag===64}},
+      deferReply: async () => { throw Object.assign(Error("archived"),{code:50083}); },
+      deferUpdate: async function () { this.deferred=true; },
+    };
+    await f.ui.handle(i);
+    assert.equal(f.store.read(actor,c.id).state,"in_progress");
+    assert.ok(i.deferred);
+    assert.match(JSON.stringify(i.replies), /案件重開/);
+  } finally { f.done(); }
+});
+
+test("modal results never overwrite a public source message", async () => {
+  const f=setup();
+  try {
+    let updated=false;
+    const i={...interaction("modal","hk:create:anonymous"),isFromMessage:()=>true,message:{flags:{has:()=>false}},deferUpdate:async()=>{updated=true;}};
+    await f.ui.handle(i);
+    assert.equal(updated,false);
+    assert.equal(i.replies[0].flags,64);
+    assert.equal(f.store.list({guildId:"g",userId:"member",staff:false}).length,1);
+  } finally {f.done();}
+});
+
+test("persistent case panels include a safe parent-channel entry when private conversations are configured", () => {
+  const f=setup();
+  try {
+    const actor={guildId:"g",userId:"member",staff:true};
+    const c=f.store.create(actor,{title:"Fixture",body:"Test",mode:"anonymous"},"create");
+    const ui=new CaseInteractions(f.store,"g","app",async()=>actor,undefined,"parent");
+    for(const archived of [false,true]) {
+      const buttons=ui.staffPanel({...c,archived}).flatMap(r=>r.components);
+      const link=buttons.find(b=>b.style===5);
+      assert.equal(link?.url,"https://discord.com/channels/g/parent");
+      assert.equal(link?.custom_id,undefined);
+    }
+  } finally {f.done();}
+});
+
+test("case handler records accepted and denied interactions", async () => {
+  const f=setup(); const outcomes: string[]=[];
+  try {
+    const ui=new CaseInteractions(f.store,"g","app",async()=>({guildId:"g",userId:"member",staff:false}),undefined,undefined,(kind,outcome)=>outcomes.push(kind+":"+outcome));
+    await ui.handle(interaction("modal","hk:create:anonymous"));
+    await ui.handle(interaction("command","","cases"));
+    assert.deepEqual(outcomes,["modal:success","command:denied"]);
+  } finally {f.done();}
+});

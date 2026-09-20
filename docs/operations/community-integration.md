@@ -46,3 +46,22 @@ The Bot writes metadata events locally before delivery. A failed/paused XP endpo
 On rollback, disable new website ingestion first but keep the signed bridge and Bot cleanup lane alive until revocations receive durable readback. Do not stop the Bot or delete either database before cleanup. Queue/case results on the website expire after ten minutes, notifications after thirty days; local XP metadata expires after forty-eight hours and local delivery receipts after thirty days. Central XP and achievements retain their original owners.
 
 The schema and code are additive. This document describes the required deployment path; it is not a claim that production has been configured or upgraded.
+
+## 0.6.1 remaining-flow verification
+
+Archived-thread forms reuse only their ephemeral source panel (`deferUpdate` then
+`editReply`). Public-source forms still create an ephemeral reply. Actor, ownership,
+version, expiry and replay checks remain in CaseStore. A parent-channel link on
+persistent case panels provides a stable path to `/myreports` and `/cases`.
+
+Counter `hearthkeeper_case_interactions_total{kind="command|button|modal",outcome="success|failure|denied"}`
+records each handled interaction, including failures previously hidden by the UI
+error fallback. Verify successful modal submissions and failure counts through the
+loopback registry. No identifiers, message text or SDK payloads are logged.
+MCP remains not applicable: this repairs Discord interaction acknowledgements;
+website cases continue through the existing member-authorized bridge.
+
+Release evidence must distinguish implementation from actual journeys: website case
+creation and supplementation, feedback discussion/rejection, unlink role cleanup and
+relink, and ordinary member A/B isolation. Never claim human isolation from an admin
+session or fabricate production awards/notifications to make a check green.

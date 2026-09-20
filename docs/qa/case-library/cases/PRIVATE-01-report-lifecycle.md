@@ -37,10 +37,17 @@ uploading a file is not proof of ordinary-member permissions or isolation.
 
 ## Diagnostic boundaries
 
-- If a form in an archived thread fails, preserve the failure and use `/cases`
-  in an open parent channel to continue. Do not repeatedly operate stale panels;
-  record the archived-thread path as unresolved unless independently reproduced
-  and fixed. Successful parent-channel controls do not erase that finding.
+- Open an action modal from a private management panel, wait for the closed
+  thread to be archived again, then submit. Version 0.6.1 updates the originating
+  ephemeral panel instead of creating a new reply in the archived channel. The
+  result must stay private. A modal originating from a public message must never
+  overwrite it with private case details.
+- Persistent panels also link to the configured parent channel as “案件入口”.
+  Use `/myreports` there as a member or `/cases` as staff if the Discord client
+  blocks archived-message buttons before delivering an interaction. Do not grant
+  members Manage Threads or reopen every archived case to work around client UI.
+- A live failure and a successful parent-channel workaround are separate evidence;
+  reproduce the same modal-submit path after deployment before closing the defect.
 - Query one known reporter with Get Thread Member. A full thread-member listing
   has privileged-intent restrictions and is not required for this workflow; see
   [Discord channel API](https://docs.discord.com/developers/resources/channel#list-thread-members).

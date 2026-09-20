@@ -1,3 +1,4 @@
+import { MessageFlags } from "discord.js";
 import {
   categories,
   categoryName,
@@ -90,6 +91,7 @@ export class CaseInteractions {
     ) => { id: string; name: string; animated?: boolean } | undefined = () =>
       undefined,
     private privateParentId?: string,
+    private observe: (kind: "command" | "button" | "modal", outcome: "success" | "failure" | "denied") => void = () => {},
   ) {}
   private payload(content: string, components: any[] = []) {
     return { content, components, allowedMentions: { parse: [] }, flags: 64 };
@@ -109,6 +111,10 @@ export class CaseInteractions {
       row([
         button("處理案件", this.code(actor, c, "staff_view", true), 1),
         button("貼文管理", this.code(actor, c, "staff_forum", true)),
+        ...(this.privateParentId ? [{
+          type: 2, style: 5, label: "案件入口",
+          url: `https://discord.com/channels/${this.guildId}/${this.privateParentId}`,
+        }] : []),
       ]),
     ];
   }
@@ -409,6 +415,7 @@ export class CaseInteractions {
       return false;
     if (!command && !id.startsWith("hk:")) return false;
     const zh = i.locale === "zh-TW";
+    let outcome: "success" | "failure" | "denied" = "success";
     try {
       // Opening a modal must be the initial response, so do no network work on this path.
       if (
@@ -452,7 +459,14 @@ export class CaseInteractions {
       }
       // For action buttons the role check must fit the initial modal response deadline.
       const opensAction = buttonInput && id.startsWith("hk:act:");
-      if (!opensAction) await i.deferReply({ flags: 64 });
+      if (!opensAction) {
+        // A modal can outlive the thread's open state. Update only its already
+        // private source panel; creating a new reply in an archived thread fails.
+        // Public source messages must never receive private case results.
+        if (modal && i.isFromMessage?.() && i.message?.flags?.has(MessageFlags.Ephemeral))
+          await i.deferUpdate();
+        else await i.deferReply({ flags: MessageFlags.Ephemeral });
+      }
       let actor = await this.actor(i);
       if (modal && /^hk:create:(anonymous|identified)(:[a-z_]+)?$/.test(id)) {
         actor = { ...actor, staff: false };
@@ -545,6 +559,7 @@ export class CaseInteractions {
       throw new CaseError("invalid");
     } catch (e) {
       const code = e instanceof CaseError ? e.message : "unavailable";
+      outcome = code === "denied" ? "denied" : "failure";
       const messages: Record<string, [string, string]> = {
         denied: [
           "你沒有這個案件的操作權限。",
@@ -603,6 +618,8 @@ export class CaseInteractions {
         /* Never log private interaction payloads. */
       }
       return true;
+    } finally {
+      this.observe(modal ? "modal" : buttonInput ? "button" : "command", outcome);
     }
   }
 }
