@@ -94,7 +94,7 @@ export class CaseInteractions {
     private observe: (kind: "command" | "button" | "modal", outcome: "success" | "failure" | "denied") => void = () => {},
   ) {}
   private payload(content: string, components: any[] = []) {
-    return { content, components, allowedMentions: { parse: [] }, flags: 64 };
+    return { content, embeds: [], components, allowedMentions: { parse: [] }, flags: 64 };
   }
   private async send(i: any, p: any) {
     if (i.deferred || i.replied) {
@@ -394,7 +394,6 @@ export class CaseInteractions {
           ]
         : []),
     ]);
-    delete result.content;
     result.embeds = [{ description: content }];
     await this.send(i, result);
   }
