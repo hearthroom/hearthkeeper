@@ -172,6 +172,12 @@ export function createRuntime(config: Config) {
     buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 3],
     registers: [registry],
   });
+  const caseInteractions = new Counter({
+    name: "hearthkeeper_case_interactions_total",
+    help: "Case interaction outcomes without private payloads.",
+    labelNames: ["kind", "outcome"],
+    registers: [registry],
+  });
   const delivery = new Counter({
     name: "hearthkeeper_case_delivery_total",
     help: "Case synchronization attempts.",
@@ -207,6 +213,9 @@ export function createRuntime(config: Config) {
   let ready = false;
   readyGauge.set(0);
   return {
+    recordCaseInteraction(kind: "command" | "button" | "modal", outcome: "success" | "failure" | "denied") {
+      caseInteractions.inc({ kind, outcome });
+    },
     recordPrivateDelivery(outcome: "success" | "failure" | "capacity") {
       privateDelivery.inc({ outcome });
     },

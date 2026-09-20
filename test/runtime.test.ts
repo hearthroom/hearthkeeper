@@ -208,3 +208,15 @@ test("private conversation monitoring separates safety, pending and bounded outc
     /hearthkeeper_case_private_delivery_total\{outcome="capacity"\} 1/,
   );
 });
+
+test("case interaction metrics use bounded kinds and outcomes without case identities", async () => {
+  const r = createRuntime(loadConfig(env));
+  r.recordCaseInteraction("modal", "success");
+  r.recordCaseInteraction("button", "failure");
+  r.recordCaseInteraction("command", "denied");
+  const text = await r.metrics();
+  assert.match(text, /hearthkeeper_case_interactions_total\{kind="modal",outcome="success"\} 1/);
+  assert.match(text, /hearthkeeper_case_interactions_total\{kind="button",outcome="failure"\} 1/);
+  assert.match(text, /hearthkeeper_case_interactions_total\{kind="command",outcome="denied"\} 1/);
+  assert.ok(!text.includes(env.DISCORD_GUILD_ID));
+});
