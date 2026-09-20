@@ -464,7 +464,7 @@ test("upgrade from the old schema preserves closed cases and encrypted ownership
   }
 });
 
-test("staff can choose waiting, processing or waiting for technology; replies advance status but member updates preserve the queue", () => {
+test("staff can choose waiting, processing or waiting for technology; replies and member updates preserve explicitly selected technical queue", () => {
   const f = fixture();
   try {
     const c = create(f.store);
@@ -506,7 +506,7 @@ test("staff can choose waiting, processing or waiting for technology; replies ad
       "Answer",
       "answer",
     );
-    assert.equal(current.state, "in_progress");
+    assert.equal(current.state, "waiting_technical");
     current = f.store.act(
       staff,
       c.id,

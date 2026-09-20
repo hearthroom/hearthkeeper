@@ -3,6 +3,7 @@ import {
   forumActions,
   statusActions,
   internalActions,
+  workflowKind,
 } from "./catalog.js";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -34,12 +35,16 @@ export type Action =
   | "restore"
   | "set_waiting"
   | "set_processing"
-  | "wait_technical";
+  | "wait_technical"
+  | "discuss"
+  | "pass"
+  | "not_adopted";
 export type State =
   | "submitted"
   | "in_progress"
   | "waiting_member"
   | "waiting_technical"
+  | "under_discussion"
   | "closed";
 export interface CaseEvent {
   seq: number;
@@ -58,6 +63,7 @@ export interface CaseView {
   archived: boolean;
   locked: boolean;
   state: State;
+  resolution: "passed" | "not_adopted" | null;
   version: number;
   threadId: string | null;
   sync: "pending" | "synced";
@@ -74,6 +80,7 @@ interface Row {
   archived: number;
   locked: number;
   state: State;
+  resolution: "passed" | "not_adopted" | null;
   version: number;
   thread_id: string | null;
   projected_version: number;
@@ -148,6 +155,8 @@ export class CaseStore {
           "UPDATE cases SET archived=1,locked=1 WHERE state='closed'",
         );
       });
+    if (!columns.some((c) => c.name === "resolution"))
+      this.db.exec("ALTER TABLE cases ADD COLUMN resolution TEXT");
     // Replay the independent deletion ledger before accepting interactions after restore.
     const ledger = options.path + ".deletions.jsonl";
     if (existsSync(ledger)) {
@@ -345,6 +354,7 @@ export class CaseStore {
       archived: !!r.archived,
       locked: !!r.locked,
       state: r.state,
+      resolution: r.resolution,
       version: r.version,
       threadId: r.thread_id,
       sync:
@@ -374,6 +384,51 @@ export class CaseStore {
         .prepare("SELECT id FROM cases WHERE thread_id=? AND guild=?")
         .get(threadId, this.options.guildId) as { id: string } | undefined
     )?.id;
+  }
+  // Only settled projections may consume external Discord changes. No human decision is inferred.
+  observeThread(
+    id: string,
+    version: number,
+    flags: { archived: boolean; locked: boolean },
+  ) {
+    return this.transaction(() => {
+      const c = this.projection(id);
+      if (
+        !c.threadId ||
+        c.version !== version ||
+        c.sync !== "synced" ||
+        (c.archived === flags.archived && c.locked === flags.locked)
+      )
+        return false;
+      this.db
+        .prepare(
+          "UPDATE cases SET archived=?,locked=?,version=version+1 WHERE id=?",
+        )
+        .run(+flags.archived, +flags.locked, id);
+      // An observation is already delivered; it must not unarchive the post to send a notice.
+      this.db
+        .prepare(
+          "INSERT INTO events(case_id,seq,kind,body,delivery_key,status) VALUES(?,?,?,?,?,?)",
+        )
+        .run(
+          id,
+          version + 1,
+          "thread_state",
+          "Discord 貼文狀態已更新。",
+          token(),
+          "done",
+        );
+      return true;
+    });
+  }
+  settledThreads(after = "") {
+    return (
+      this.db
+        .prepare(
+          "SELECT id FROM cases WHERE guild=? AND id>? AND thread_id IS NOT NULL AND projected_version=version AND NOT EXISTS(SELECT 1 FROM events WHERE case_id=cases.id AND status!='done') ORDER BY id LIMIT 20",
+        )
+        .all(this.options.guildId, after) as { id: string }[]
+    ).map((r) => this.projection(r.id));
   }
   act(
     a: Actor,
@@ -417,6 +472,7 @@ export class CaseStore {
       else body = "";
       let archived = !!r.archived,
         locked = !!r.locked;
+      let resolution = r.resolution;
       let state = r.state,
         request = r.request;
       if (forumActions.includes(kind)) {
@@ -433,12 +489,20 @@ export class CaseStore {
         }
       } else if (statusActions.includes(kind)) {
         if (state === "closed") throw new CaseError("closed");
+        if (
+          (kind === "wait_technical" &&
+            workflowKind(r.category) !== "problem") ||
+          (kind === "discuss" && workflowKind(r.category) !== "feedback")
+        )
+          throw new CaseError("invalid");
         state =
-          kind === "set_waiting"
-            ? "submitted"
-            : kind === "wait_technical"
-              ? "waiting_technical"
-              : "in_progress";
+          kind === "discuss"
+            ? "under_discussion"
+            : kind === "set_waiting"
+              ? "submitted"
+              : kind === "wait_technical"
+                ? "waiting_technical"
+                : "in_progress";
       } else if (kind === "supplement") {
         if (state === "closed") throw new CaseError("closed");
         // Member updates do not imply a moderator has started work.
@@ -448,7 +512,19 @@ export class CaseStore {
         if ((kind === "request_reopen") !== (state === "closed"))
           throw new CaseError("stale");
         request = kind;
-      } else if (kind === "close") {
+      } else if (
+        kind === "close" ||
+        kind === "pass" ||
+        kind === "not_adopted"
+      ) {
+        if (kind === "not_adopted" && workflowKind(r.category) !== "feedback")
+          throw new CaseError("invalid");
+        resolution =
+          kind === "pass"
+            ? "passed"
+            : kind === "not_adopted"
+              ? "not_adopted"
+              : null;
         if (state === "closed") throw new CaseError("closed");
         state = "closed";
         archived = true;
@@ -457,6 +533,7 @@ export class CaseStore {
       } else if (kind === "reopen") {
         if (state !== "closed") throw new CaseError("stale");
         state = "in_progress";
+        resolution = null;
         archived = false;
         locked = false;
         request = null;
@@ -469,8 +546,10 @@ export class CaseStore {
           if (state !== "submitted") throw new CaseError("stale");
           state = "in_progress";
         } else if (kind === "request_info") state = "waiting_member";
-        else if (kind === "reply") state = "in_progress";
-        else throw new CaseError("invalid");
+        else if (kind === "reply") {
+          if (!["waiting_technical", "under_discussion"].includes(state))
+            state = "in_progress";
+        } else throw new CaseError("invalid");
       }
       this.db
         .prepare(
@@ -483,8 +562,8 @@ export class CaseStore {
           id,
         );
       this.db
-        .prepare("UPDATE cases SET archived=?,locked=? WHERE id=?")
-        .run(archived ? 1 : 0, locked ? 1 : 0, id);
+        .prepare("UPDATE cases SET archived=?,locked=?,resolution=? WHERE id=?")
+        .run(archived ? 1 : 0, locked ? 1 : 0, resolution, id);
       this.record(a, id, kind, body, r.version + 1, requestKey);
       return this.read(a, id);
     });

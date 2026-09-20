@@ -43,6 +43,7 @@ async function start() {
       let safe = true;
       try {
         await cases.verify();
+        await cases.reconcileThreads();
       } catch {
         safe = false;
       }
@@ -88,6 +89,15 @@ async function start() {
       if (interaction.isChatInputCommand()) await runtime.handle(interaction);
     } catch {
       status("interaction_failed");
+    }
+  });
+
+  client.on(Events.ThreadUpdate, async (_oldThread, thread) => {
+    try {
+      if (cases && (await cases.onThreadUpdate(thread))) void tick();
+    } catch {
+      runtime.recordDelivery("failure");
+      status("case_thread_update_failed");
     }
   });
 
