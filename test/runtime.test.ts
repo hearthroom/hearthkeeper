@@ -24,9 +24,9 @@ test('configuration requires explicit app, guild and token without exposing valu
   assert.equal(loadConfig(env).metricsHost, '127.0.0.1');
 });
 
-test('bootstrap requests only Guilds intent and exposes no unfinished case or punishment actions', () => {
+test('commands use only Guilds intent and include the delivered report workflow', () => {
   assert.deepEqual(gatewayIntents, [GatewayIntentBits.Guilds]);
-  assert.deepEqual(commandDefinitions.map(x => x.name), ['hearthkeeper','ping']);
+  assert.deepEqual(commandDefinitions.map(x => x.name), ['hearthkeeper','feedback','myreports','cases','ping']);
   assert.ok(commandDefinitions.every(x => x.dm_permission === false));
 });
 

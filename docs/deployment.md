@@ -1,13 +1,13 @@
-# 部署 Hearthkeeper 0.1.0
+# 部署 Hearthkeeper 0.2.0
 
-這個版本驗證 Discord 連線、服務選單與運作監控，尚不收集回報或執行管理處分。
+這個版本提供 Discord 連線、一般回報處理與結案留檔，不執行管理處分。
 部署需要一台可持續運作、能透過 HTTPS／WebSocket 連出 Discord 的 Linux 主機。
 不需 GPU、AI 供應商帳號、對外網站埠或公開 callback 網址。
 
 ## Discord 設定
 
 建立專用 Discord Application 與 Bot，僅啟用 Guild Install，使用 `bot` 與
-`applications.commands` scopes。0.1.0 不要求 Administrator、Manage Roles、
+`applications.commands` scopes。0.2.0 不要求 Administrator、Manage Roles、
 Moderate Members 或 Message Content／Presence／Server Members 特權 intents。
 指令回覆只對操作成員可見，不會自動發送私訊或張貼公告。
 
@@ -23,7 +23,7 @@ Moderate Members 或 Message Content／Presence／Server Members 特權 intents�
 - `/opt/hearthkeeper/current`：已核准的版本連結。
 - `/opt/hearthkeeper/node`：固定版本 Node.js 執行環境。
 - `/etc/hearthkeeper/runtime.env`：root 擁有、0600，systemd 讀取後傳入程序。
-- `/var/lib/hearthkeeper`：保留給未來持久資料；0.1.0 不儲存案件。
+- `/var/lib/hearthkeeper`：持久 SQLite 案件資料、WAL 及獨立清除清單。
 
 `runtime.env` 需要 `DISCORD_TOKEN`、`DISCORD_APPLICATION_ID`、`DISCORD_GUILD_ID`，
 可選 `METRICS_PORT`，預設 11940。不要將真實值寫入 Git、命令列參數或公共 Issue。
@@ -66,5 +66,19 @@ HTTP 只綁定 `127.0.0.1`，不接受環境變數改成公開地址。
 
 SIGTERM 會將 readiness 降為 0，關閉 HTTP 與 Discord 連線。
 需要回滾時停止專用服務，將 current 指向已驗證的前一 release，再啟動與讀回。
-0.1.0 沒有資料庫 migration；未來導入案件資料後須另外驗證 schema 相容性。
+0.2.0 首次啟動建立案件 schema。回滾至 0.1 不會處理既有案件；須保留資料目錄及金鑰，不能刪除資料。
 停止機器人不會刪除 Discord 社群、頻道或其他 bot。
+
+## 案件功能啟用
+
+建立新的私人論壇，拒絕 @everyone 檢視，只允許核准社管角色與 Hearthkeeper。
+機器人僅在該論壇取得檢視頻道、建立貼文、在貼文中傳送訊息、嵌入連結、讀取歷史及管理貼文權限。
+若 Discord 畫面停用某權限，必須由具備該權限的管理員授予，不能繞過帳號權限。
+
+將 `.env.example` 的全部 CASE_* 設定寫入受限環境檔；兩把 key 分別生成 32 隨機 bytes 並轉成 hex。
+正式金鑰不得放入命令列、Git、Issue 或日誌；更換／遺失金鑰會使既有案件無法讀取，必須保留安全備份。
+新增環境後重新註冊指令並重啟專用服務。先讀回論壇權限，再跑表單至結案的實際路徑。
+檢查 `hearthkeeper_case_forum_ready == 1` 及 `hearthkeeper_case_pending == 0`，不能只看 `/readyz`。
+
+保留期限、未知發送、加密及備份恢復邊界見 [0.2 設計](technical-design/Feedback_0.2.md)。
+目前提供 Prometheus endpoint，沒有自行修改主機的 scrape 或告警設定。
