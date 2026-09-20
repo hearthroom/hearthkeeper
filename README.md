@@ -3,8 +3,16 @@
 Hearthkeeper 是為 HearthRoom 角色卡社群設計的開源 Discord 管理機器人。
 它讓成員提出建議、回報問題與申訴，讓社管認領案件、回覆並保存處理結果。
 
-**目前是設計階段，尚無可執行的機器人。** 本倉庫不會自動連接 Discord、
-建立頻道或變更社群設定。第一版以服務選單、匿名代轉、私密回報與管理紀錄為主。
+**0.1.0 提供連線與部署基礎。** `/hearthkeeper` 開啟社群與指南選單，`/ping` 驗證回應。
+回報、案件追蹤、通知身分組與處分功能尚未實作；設計文件描述的是後續目標。
+目前只接收 slash command，不讀取一般聊天、不需要 AI，也不保存使用者或案件資料。
+
+## 執行
+
+使用 Node.js 24 LTS，執行 `npm ci` 與 `npm run check` 完成測試及建置。
+依 `.env.example` 設定環境變數後，`npm run register` 註冊指定社群的指令，
+`npm start` 啟動 Gateway 連線。一般啟動不會自動覆寫指令或建立頻道。
+正式環境請依 [部署說明](docs/deployment.md) 使用專用服務帳號。
 
 ## 閱讀入口
 
@@ -12,6 +20,7 @@ Hearthkeeper 是為 HearthRoom 角色卡社群設計的開源 Discord 管理機�
 - [技術設計 V1.0](docs/technical-design/Hearthkeeper_TechnicalDesign_20260920_V1.0.md)：流程、權限、資料生命週期與驗收。
 - [貢獻方式與提交身分](CONTRIBUTING.md)：如何提出修改及使用專案身分。
 - [安全問題回報](SECURITY.md)：避免將私密案件放進公開 Issue。
+- [部署說明](docs/deployment.md)：Bot 權限、環境變數、systemd 與健康監控。
 
 ## 設計原則
 
