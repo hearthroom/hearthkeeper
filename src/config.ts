@@ -1,7 +1,9 @@
+import type { CommunityConfig } from "./community/bot.js";
 import { isAbsolute } from "node:path";
 import type { CaseConfig } from "./cases/discord.js";
 export interface Config {
   cases?: CaseConfig;
+  community?: CommunityConfig;
   token: string;
   applicationId: string;
   guildId: string;
@@ -78,7 +80,80 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       privateMaxActive: Number(rawCapacity),
     };
   }
+  let community: CommunityConfig | undefined;
+  if (env.COMMUNITY_ENABLED === "true") {
+    const site = new URL(required("COMMUNITY_SITE_URL"));
+    if (
+      site.protocol !== "https:" ||
+      site.pathname !== "/" ||
+      site.search ||
+      site.hash ||
+      site.username ||
+      site.password
+    )
+      throw new Error("Invalid COMMUNITY_SITE_URL");
+    const key = required("COMMUNITY_BRIDGE_KEY");
+    if (
+      !/^[a-f0-9]{64}$/i.test(key) ||
+      key === cases?.key ||
+      key === cases?.lookupKey
+    )
+      throw new Error("Invalid COMMUNITY_BRIDGE_KEY");
+    const databasePath = required("COMMUNITY_DATABASE_PATH");
+    if (!isAbsolute(databasePath) || databasePath === cases?.databasePath)
+      throw new Error("Invalid COMMUNITY_DATABASE_PATH");
+    const channels = (env.COMMUNITY_XP_CHANNELS ?? "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (
+      channels.some(
+        (v) =>
+          !/^\d{17,20}$/.test(v) ||
+          v === cases?.forumId ||
+          v === cases?.privateParentId,
+      )
+    )
+      throw new Error("Invalid COMMUNITY_XP_CHANNELS");
+    const roles = JSON.parse(
+      env.COMMUNITY_ROLES ?? "[]",
+    ) as CommunityConfig["roles"];
+    if (
+      !Array.isArray(roles) ||
+      roles.length > 25 ||
+      new Set(roles.map((r) => r.id)).size !== roles.length ||
+      roles.some(
+        (r) =>
+          !/^\d{17,20}$/.test(r.id) ||
+          r.id === guildId ||
+          cases?.staffRoleIds.includes(r.id) ||
+          Object.keys(r).some(
+            (k) => !["id", "level", "badge", "linked"].includes(k),
+          ) ||
+          Number(r.level !== undefined) +
+            Number(r.badge !== undefined) +
+            Number(r.linked !== undefined) !==
+            1 ||
+          (r.level !== undefined &&
+            (!Number.isInteger(r.level) || r.level < 1 || r.level > 1000)) ||
+          (r.badge !== undefined && r.badge !== "first_work") ||
+          (r.linked !== undefined && r.linked !== true),
+      )
+    )
+      throw new Error("Invalid COMMUNITY_ROLES");
+    community = {
+      site: site.origin,
+      key,
+      databasePath,
+      channels,
+      roles,
+      reviewChannel: env.COMMUNITY_REVIEW_CHANNEL
+        ? snowflake("COMMUNITY_REVIEW_CHANNEL")
+        : undefined,
+    };
+  }
   return {
+    community,
     token,
     applicationId,
     guildId,

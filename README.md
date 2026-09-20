@@ -45,3 +45,9 @@ Hearthkeeper 是為 HearthRoom 角色卡社群設計的開源 Discord 管理機�
 原始碼位置：<https://github.com/hearthroom/hearthkeeper>。
 專案採 [GNU AGPL v3](LICENSE)。部署者自行保管憑證、案件資料及備份；
 開源範圍不包含實際社群設定、身分對應或回報內容。
+
+## HearthRoom community integration
+
+Optional website account links, chat XP/levels, achievement roles, public-card previews,
+notifications and website access to the same private case workflow are available in the
+0.6 source. They are disabled by default. See [configuration and rollout](docs/operations/community-integration.md).
