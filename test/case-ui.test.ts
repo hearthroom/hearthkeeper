@@ -134,7 +134,7 @@ test("member can read all of a long formatted report without truncation", async 
     await f.ui.handle(i);
     const last = i.replies.at(-1);
     assert.ok(
-      (last.content ?? last.embeds?.[0]?.description).includes("ENDMARKER"),
+      [last.content, ...last.embeds.map((e: any) => e.description)].join("").includes("ENDMARKER"),
     );
   } finally {
     f.done();
@@ -305,6 +305,7 @@ test("archived-thread modal updates its private panel without creating a new thr
     await f.ui.handle(i);
     assert.equal(f.store.read(actor,c.id).state,"in_progress");
     assert.ok(i.deferred);
+    assert.equal(i.replies.at(-1).content, "", "replace stale panel status with the new detail");
     assert.match(JSON.stringify(i.replies), /案件重開/);
   } finally { f.done(); }
 });
