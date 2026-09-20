@@ -1,3 +1,4 @@
+import { CommunityBot } from "./community/bot.js";
 import { CaseStore } from "./cases/store.js";
 import { DiscordCases } from "./cases/discord.js";
 import { DiscordPrivateCases } from "./cases/private-discord.js";
@@ -56,6 +57,19 @@ async function start() {
           runtime.recordPrivateDelivery,
         )
       : undefined;
+  const community = config.community
+    ? new CommunityBot(
+        client,
+        config.guildId,
+        config.community,
+        config.cases?.staffRoleIds ?? [],
+        store,
+        config.cases?.privateParentId,
+        runtime.recordCommunity,
+      )
+    : undefined;
+  const communityTimer = setInterval(() => void community?.tick(), 15000);
+  communityTimer.unref();
   let ticking = false;
   const tick = async () => {
     if (ticking || !client.isReady() || !cases || !store || !worker) return;
@@ -118,6 +132,7 @@ async function start() {
   client.on(Events.ShardError, () => status("gateway_error"));
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
+      if (community && (await community.handle(interaction))) return;
       if (cases && (await cases.ui.handle(interaction))) {
         void tick();
         return;
@@ -139,6 +154,7 @@ async function start() {
 
   client.on(Events.MessageCreate, async (message) => {
     try {
+      community?.onMessage(message);
       if (cases && (await cases.onStaffMessage(message))) void tick();
     } catch {
       runtime.recordDelivery("failure");
@@ -158,6 +174,7 @@ async function start() {
     stopping = true;
     runtime.setReady(false);
     clearInterval(timer);
+    clearInterval(communityTimer);
     server.close();
     await client.destroy();
     status("stopped");

@@ -10,6 +10,54 @@ export const gatewayIntents = [
   GatewayIntentBits.Guilds,
   GatewayIntentBits.GuildMessages,
 ];
+export const communityCommands = [
+  {
+    name: "card",
+    description: "Preview a public HearthRoom card",
+    description_localizations: { "zh-TW": "預覽 HearthRoom 公開角色卡" },
+    dm_permission: false,
+    options: [
+      {
+        type: 3 as const,
+        name: "number",
+        description: "Public HearthRoom card number",
+        required: true,
+      },
+    ],
+  },
+  {
+    name: "link",
+    description: "Link your HearthRoom community account",
+    description_localizations: { "zh-TW": "連結 HearthRoom 社群帳號" },
+    dm_permission: false,
+  },
+  {
+    name: "level",
+    description: "View your community level and badges",
+    description_localizations: { "zh-TW": "查看社群等級與徽章" },
+    dm_permission: false,
+  },
+  {
+    name: "subscriptions",
+    description: "Manage community notifications",
+    description_localizations: { "zh-TW": "管理社群通知" },
+    dm_permission: false,
+  },
+  {
+    name: "xp",
+    description: "Pause or resume chat XP",
+    description_localizations: { "zh-TW": "停止或恢復發言計分" },
+    dm_permission: false,
+    options: [
+      {
+        type: 5 as const,
+        name: "enabled",
+        description: "Whether to count future chat XP",
+        required: true,
+      },
+    ],
+  },
+];
 export const commandDefinitions = [
   {
     name: "hearthkeeper",
@@ -44,11 +92,14 @@ export const commandDefinitions = [
 ];
 
 export function commandsFor(config: Config) {
-  return config.cases
-    ? commandDefinitions
-    : commandDefinitions.filter((c) =>
-        ["hearthkeeper", "ping"].includes(c.name),
-      );
+  return [
+    ...(config.cases
+      ? commandDefinitions
+      : commandDefinitions.filter((c) =>
+          ["hearthkeeper", "ping"].includes(c.name),
+        )),
+    ...(config.community ? communityCommands : []),
+  ];
 }
 
 export interface CommandInteraction {
@@ -101,6 +152,12 @@ export function createRuntime(config: Config) {
     name: "hearthkeeper_interactions_total",
     help: "Handled command outcomes.",
     labelNames: ["action", "outcome"],
+    registers: [registry],
+  });
+  const communitySync = new Counter({
+    name: "hearthkeeper_community_sync_total",
+    help: "Community synchronization outcomes.",
+    labelNames: ["outcome"],
     registers: [registry],
   });
   const readyGauge = new Gauge({
@@ -156,6 +213,13 @@ export function createRuntime(config: Config) {
     setPrivateHealth(count: number, safe: boolean) {
       privatePending.set(count);
       privateReady.set(safe ? 1 : 0);
+    },
+    recordCommunity(outcome: string) {
+      communitySync.inc({
+        outcome: ["synced", "not_member", "denied", "failed"].includes(outcome)
+          ? outcome
+          : "failed",
+      });
     },
     recordDelivery(outcome: "success" | "failure") {
       delivery.inc({ outcome });
