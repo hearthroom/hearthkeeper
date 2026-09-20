@@ -1,4 +1,4 @@
-# 部署 Hearthkeeper 0.4.0
+# 部署 Hearthkeeper 0.5.0
 
 這個版本提供 Discord 連線、一般回報處理與結案留檔，不執行管理處分。
 部署需要一台可持續運作、能透過 HTTPS／WebSocket 連出 Discord 的 Linux 主機。
@@ -7,7 +7,7 @@
 ## Discord 設定
 
 建立專用 Discord Application 與 Bot，僅啟用 Guild Install，使用 `bot` 與
-`applications.commands` scopes。0.3.0 不要求 Administrator、Manage Roles、
+`applications.commands` scopes。0.5.0 不要求 Administrator、Manage Roles、
 Moderate Members 或 Message Content／Presence／Server Members 特權 intents。
 指令回覆只對操作成員可見，不會自動發送私訊或張貼公告。
 
@@ -123,3 +123,9 @@ SIGTERM 會將 readiness 降為 0，關閉 HTTP 與 Discord 連線。
 不要讓 0.3 同時處理已使用新流程的資料。舊欄位與金鑰均保留。
 
 規則、驗收與可觀測性見 [0.4 設計](technical-design/Case_Workflows_0.4.md)。
+
+## 0.5 私密對話入口
+
+依 [0.5 權限表及驗收](technical-design/Private_Reports_0.5.md) 配置專用一般文字頻道與 `CASE_PRIVATE_PARENT_ID`，不改社管論壇的 @everyone deny。`CASE_PRIVATE_MAX_ACTIVE` 選填，預設 100；基礎 CASE_* 金鑰保持原值。
+
+先跑完整可信集及精確來源發布，再驗證私人入口 ready、一般成員隔離、附件和結案鎖定；不得把 source build 或單一管理員帳號視角當完整權限驗收。

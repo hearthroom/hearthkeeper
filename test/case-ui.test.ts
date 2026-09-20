@@ -238,3 +238,51 @@ test("second panel follows case kind and uses guild emoji payloads with explicit
     }
   }
 });
+test("configured private reports are primary, queue a conversation and reveal only a ready owner link", async () => {
+  const f = setup();
+  try {
+    const ui = new CaseInteractions(
+      f.store,
+      "g",
+      "app",
+      async (i) => ({ guildId: "g", userId: i.user.id, staff: false }),
+      undefined,
+      "parent",
+    );
+    const choice = interaction("button", "hk:category:bug");
+    await ui.handle(choice);
+    const first = choice.replies[0].components[0].components[0];
+    assert.equal(first.custom_id, "hk:new:identified:bug");
+    assert.equal(first.style, 1);
+    const i = interaction("modal", "hk:create:identified:bug");
+    await ui.handle(i);
+    const c = f.store.list({
+      guildId: "g",
+      userId: "member",
+      staff: false,
+    })[0]!;
+    assert.equal(f.store.privateProjection(c.id)?.parentId, "parent");
+    assert.match(JSON.stringify(i.replies), /準備中/);
+    assert.doesNotMatch(JSON.stringify(i.replies), /discord.com\/channels/);
+    f.store.privateThread(c.id, "thread");
+    f.store.privateSynced(c.id, c.version);
+    const action = f.store.action(
+      { guildId: "g", userId: "member", staff: false },
+      c.id,
+      "view",
+      c.version,
+    );
+    const view = interaction("button", "hk:act:" + action);
+    await ui.handle(view);
+    assert.match(
+      JSON.stringify(view.replies),
+      /https:\/\/discord.com\/channels\/g\/thread/,
+    );
+    const other = interaction("button", "hk:act:" + action);
+    other.user.id = "other";
+    await ui.handle(other);
+    assert.doesNotMatch(JSON.stringify(other.replies), /discord.com\/channels/);
+  } finally {
+    f.done();
+  }
+});

@@ -89,6 +89,7 @@ export class CaseInteractions {
       name: string,
     ) => { id: string; name: string; animated?: boolean } | undefined = () =>
       undefined,
+    private privateParentId?: string,
   ) {}
   private payload(content: string, components: any[] = []) {
     return { content, components, allowedMentions: { parse: [] }, flags: 64 };
@@ -165,20 +166,26 @@ export class CaseInteractions {
     );
   }
   private consent(zh: boolean, category = "general") {
+    const direct = this.privateParentId
+      ? zh
+        ? "私密回報會建立你與社管的私人討論串，可直接交談及傳附件；社管能看到你的 Discord 帳號。討論串準備期間仍可從「我的回報」補充。\n\n"
+        : "Private reports open a conversation with moderators where you can chat and attach files. Moderators can see your Discord account. My reports remains available while the conversation is being prepared.\n\n"
+      : "";
     return this.payload(
-      zh
-        ? "**選擇回報方式**\n匿名回報不向社管顯示帳號；私密回報會顯示帳號。機器人仍保存身分對應，維運者與 Discord 可接觸資料。\n\n你自行填寫的姓名或連結可能透露身分。案件結案後保存 90 天；論壇刪除若遇錯誤會重試。每人最多 3 個未結案回報，送出間隔 60 秒。\n\n回報會交由這個伺服器的社管查看；若涉及社管本人，請另找可信任的承辦人。"
-        : "**Choose report privacy**\nAnonymous reports hide your account from moderators; identified reports show it. The bot keeps an identity mapping accessible to operators and Discord. Names and links you write may reveal you.\n\nCases are retained for 90 days after closure; failed forum deletions are retried. Maximum 3 open reports, 60 seconds between submissions. Reports go to this server’s moderators. If your report concerns a moderator, contact a trusted handler separately.",
+      direct +
+        (zh
+          ? "**選擇回報方式**\n匿名回報不向社管顯示帳號；私密回報會顯示帳號。機器人仍保存身分對應，維運者與 Discord 可接觸資料。\n\n你自行填寫的姓名或連結可能透露身分。案件結案後保存 90 天；論壇刪除若遇錯誤會重試。每人最多 3 個未結案回報，送出間隔 60 秒。\n\n回報會交由這個伺服器的社管查看；若涉及社管本人，請另找可信任的承辦人。"
+          : "**Choose report privacy**\nAnonymous reports hide your account from moderators; identified reports show it. The bot keeps an identity mapping accessible to operators and Discord. Names and links you write may reveal you.\n\nCases are retained for 90 days after closure; failed forum deletions are retried. Maximum 3 open reports, 60 seconds between submissions. Reports go to this server’s moderators. If your report concerns a moderator, contact a trusted handler separately."),
       [
         row([
           button(
-            zh ? "匿名回報" : "Anonymous report",
-            "hk:new:anonymous:" + category,
+            zh ? "提出私密回報" : "Submit private report",
+            "hk:new:identified:" + category,
             1,
           ),
           button(
-            zh ? "私密回報（顯示帳號）" : "Identified report",
-            "hk:new:identified:" + category,
+            zh ? "改用匿名代轉" : "Use anonymous relay",
+            "hk:new:anonymous:" + category,
           ),
         ]),
       ],
@@ -191,8 +198,8 @@ export class CaseInteractions {
       i,
       this.payload(
         zh
-          ? `**貼文管理・${workflowKind(c.category) === "feedback" ? "回饋" : "問題"}**\n${this.statusName(c, zh)}\n${c.archived ? "已關閉" : "開啟中"} · ${c.locked ? "已鎖定" : "未鎖定"}\n關閉會封存貼文；鎖定限制一般成員重新開啟，不會讓開啟中的貼文停止收訊。一般貼文操作不會結案；未完成時鎖定${workflowKind(c.category) === "problem" ? "並關閉" : ""}會顯示黃色。PASS${workflowKind(c.category) === "feedback" ? " 或未採納" : ""}會自動關閉並鎖定。已結案案件須先重開案件。`
-          : `**Post management**\n${this.statusName(c, zh)}\n${c.archived ? "Closed" : "Open"} · ${c.locked ? "Locked" : "Unlocked"}\nClosing archives the post. Locking restricts reopening; it does not stop replies in an active post. Post controls do not resolve the case. PASS / Not adopted close and lock automatically. Reopen a resolved case first.`,
+          ? `**貼文管理・${workflowKind(c.category) === "feedback" ? "回饋" : "問題"}**\n${this.statusName(c, zh)}\n${c.archived ? "已關閉" : "開啟中"} · ${c.locked ? "已鎖定" : "未鎖定"}\n關閉會封存貼文；鎖定會限制一般成員發言及重新開啟。一般貼文操作不會結案；未完成時鎖定${workflowKind(c.category) === "problem" ? "並關閉" : ""}會顯示黃色。PASS${workflowKind(c.category) === "feedback" ? " 或未採納" : ""}會自動關閉並鎖定。已結案案件須先重開案件。`
+          : `**Post management**\n${this.statusName(c, zh)}\n${c.archived ? "Closed" : "Open"} · ${c.locked ? "Locked" : "Unlocked"}\nClosing archives the post. Locking restricts member replies and reopening. Post controls do not resolve the case. PASS / Not adopted close and lock automatically. Reopen a resolved case first.`,
         c.state === "closed"
           ? [
               row([
@@ -306,6 +313,12 @@ export class CaseInteractions {
     );
     const event = c.events[index]!;
     let content = `**HK-${c.id.slice(0, 8)} · ${clean(c.title)}**\n${categoryName(c.category, zh)} · ${this.statusName(c, zh)} · ${c.mode === "anonymous" ? (zh ? "匿名" : "Anonymous") : zh ? "私密" : "Identified"}${c.sync === "pending" ? (zh ? " · 論壇同步待處理" : " · Forum sync pending") : ""}\n\n**${eventName(event.kind, zh)} (${index + 1}/${c.events.length})**\n${clean(event.body)}`;
+    if (c.privatePending)
+      content +=
+        "\n" +
+        (zh
+          ? "私人討論串準備中，請稍後更新進度；你仍可在這裡補充內容。"
+          : "Your private conversation is being prepared. Refresh shortly, or add details here.");
     if (c.request)
       content +=
         "\n\n" +
@@ -346,6 +359,22 @@ export class CaseInteractions {
         );
     }
     const result: any = this.payload("", [
+      row([
+        button(
+          zh ? "更新進度" : "Refresh",
+          this.code(a, c, a.staff ? "staff_view" : "view"),
+        ),
+        ...(c.privateThreadId
+          ? [
+              {
+                type: 2,
+                style: 5,
+                label: zh ? "開啟私人對話" : "Open private conversation",
+                url: `https://discord.com/channels/${this.guildId}/${c.privateThreadId}`,
+              },
+            ]
+          : []),
+      ]),
       ...(nav.length ? [row(nav)] : []),
       ...(actions.length ? [row(actions)] : []),
       ...(a.staff
@@ -434,6 +463,9 @@ export class CaseInteractions {
             title: i.fields.getTextInputValue("title"),
             body: i.fields.getTextInputValue("body"),
             mode: id.split(":")[2] === "anonymous" ? "anonymous" : "identified",
+            ...(id.split(":")[2] === "identified" && this.privateParentId
+              ? { privateParentId: this.privateParentId }
+              : {}),
           },
           i.id,
         );

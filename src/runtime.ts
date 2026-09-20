@@ -6,7 +6,10 @@ import {
 } from "discord.js";
 import type { Config } from "./config.js";
 
-export const gatewayIntents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
+export const gatewayIntents = [
+  GatewayIntentBits.Guilds,
+  GatewayIntentBits.GuildMessages,
+];
 export const commandDefinitions = [
   {
     name: "hearthkeeper",
@@ -128,9 +131,32 @@ export function createRuntime(config: Config) {
     help: "Whether the staff forum passes its permission checks.",
     registers: [registry],
   });
+  const privateDelivery = new Counter({
+    name: "hearthkeeper_case_private_delivery_total",
+    help: "Private conversation synchronization outcomes.",
+    labelNames: ["outcome"],
+    registers: [registry],
+  });
+  const privatePending = new Gauge({
+    name: "hearthkeeper_case_private_pending",
+    help: "Cases awaiting private conversation synchronization.",
+    registers: [registry],
+  });
+  const privateReady = new Gauge({
+    name: "hearthkeeper_case_private_ready",
+    help: "Whether configured private conversation parents pass permission checks.",
+    registers: [registry],
+  });
   let ready = false;
   readyGauge.set(0);
   return {
+    recordPrivateDelivery(outcome: "success" | "failure" | "capacity") {
+      privateDelivery.inc({ outcome });
+    },
+    setPrivateHealth(count: number, safe: boolean) {
+      privatePending.set(count);
+      privateReady.set(safe ? 1 : 0);
+    },
     recordDelivery(outcome: "success" | "failure") {
       delivery.inc({ outcome });
     },

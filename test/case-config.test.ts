@@ -34,3 +34,36 @@ test("unconfigured installs do not advertise report commands they cannot handle"
     ["hearthkeeper", "ping"],
   );
 });
+test("private conversations require a separate explicit text parent and bounded active capacity", () => {
+  const base = {
+    ...env,
+    CASE_FORUM_ID: "100000000000000003",
+    CASE_STAFF_ROLE_IDS: "100000000000000004",
+    CASE_DATABASE_PATH: "/tmp/cases.db",
+    CASE_IDENTITY_KEY: "11".repeat(32),
+    CASE_LOOKUP_KEY: "22".repeat(32),
+  };
+  assert.equal(loadConfig(base).cases?.privateParentId, undefined);
+  assert.equal(
+    loadConfig({ ...base, CASE_PRIVATE_PARENT_ID: "100000000000000005" }).cases
+      ?.privateMaxActive,
+    100,
+  );
+  assert.throws(
+    () => loadConfig({ ...base, CASE_PRIVATE_PARENT_ID: base.CASE_FORUM_ID }),
+    /PRIVATE/,
+  );
+  assert.throws(
+    () => loadConfig({ ...base, CASE_PRIVATE_MAX_ACTIVE: "0" }),
+    /PRIVATE/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        ...base,
+        CASE_PRIVATE_PARENT_ID: "100000000000000005",
+        CASE_PRIVATE_MAX_ACTIVE: "2.5",
+      }),
+    /PRIVATE/,
+  );
+});

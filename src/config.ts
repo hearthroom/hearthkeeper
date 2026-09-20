@@ -55,7 +55,28 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     const databasePath = required("CASE_DATABASE_PATH");
     if (!isAbsolute(databasePath))
       throw new Error("Invalid CASE_DATABASE_PATH");
-    cases = { forumId, staffRoleIds, key, lookupKey, databasePath };
+    const privateParentId = env.CASE_PRIVATE_PARENT_ID
+      ? snowflake("CASE_PRIVATE_PARENT_ID")
+      : undefined;
+    if (privateParentId === forumId)
+      throw new Error("Invalid CASE_PRIVATE_PARENT_ID");
+    const rawCapacity = env.CASE_PRIVATE_MAX_ACTIVE ?? "100";
+    if (
+      !/^\d+$/.test(rawCapacity) ||
+      Number(rawCapacity) < 1 ||
+      Number(rawCapacity) > 500 ||
+      (!privateParentId && env.CASE_PRIVATE_MAX_ACTIVE)
+    )
+      throw new Error("Invalid CASE_PRIVATE_MAX_ACTIVE");
+    cases = {
+      forumId,
+      staffRoleIds,
+      key,
+      lookupKey,
+      databasePath,
+      privateParentId,
+      privateMaxActive: Number(rawCapacity),
+    };
   }
   return {
     token,
