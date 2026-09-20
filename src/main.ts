@@ -1,5 +1,7 @@
 import { CaseStore } from "./cases/store.js";
 import { DiscordCases } from "./cases/discord.js";
+import { DiscordPrivateCases } from "./cases/private-discord.js";
+import { PrivateDeliveryWorker } from "./cases/private-delivery.js";
 import { DeliveryWorker } from "./cases/delivery.js";
 import { Client, Events } from "discord.js";
 import { loadConfig } from "./config.js";
@@ -35,6 +37,25 @@ async function start() {
     store && cases
       ? new DeliveryWorker(store, cases, runtime.recordDelivery)
       : undefined;
+  const privateCases =
+    cases && config.cases
+      ? new DiscordPrivateCases(
+          client,
+          config.guildId,
+          config.applicationId,
+          config.cases.staffRoleIds,
+          config.cases.privateMaxActive ?? 100,
+          cases.ui,
+        )
+      : undefined;
+  const privateWorker =
+    store && privateCases
+      ? new PrivateDeliveryWorker(
+          store,
+          privateCases,
+          runtime.recordPrivateDelivery,
+        )
+      : undefined;
   let ticking = false;
   const tick = async () => {
     if (ticking || !client.isReady() || !cases || !store || !worker) return;
@@ -49,8 +70,23 @@ async function start() {
       }
       await worker.run();
       runtime.setCaseHealth(store.pending().length, safe);
+      if (privateCases && privateWorker) {
+        const parents = new Set(store.privateParents());
+        if (config.cases?.privateParentId)
+          parents.add(config.cases.privateParentId);
+        let privateSafe = parents.size > 0;
+        try {
+          for (const parent of parents) await privateCases.verify(parent);
+          await privateCases.reconcile(store);
+        } catch {
+          privateSafe = false;
+        }
+        await privateWorker.run();
+        runtime.setPrivateHealth(store.privatePendingCount(), privateSafe);
+      }
     } catch {
       runtime.setCaseHealth(store.pending().length, false);
+      runtime.setPrivateHealth(store.privatePendingCount(), false);
     } finally {
       ticking = false;
     }

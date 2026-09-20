@@ -23,6 +23,8 @@ import { CaseInteractions, forumContent } from "./interactions.js";
 import type { Transport } from "./delivery.js";
 export interface CaseConfig {
   forumId: string;
+  privateParentId?: string;
+  privateMaxActive?: number;
   staffRoleIds: string[];
   databasePath: string;
   key: string;
@@ -48,6 +50,7 @@ export class DiscordCases implements Transport {
       appId,
       (i) => this.actor(i),
       (name) => this.emojis.get(name),
+      config.privateParentId,
     );
   }
   private async guild() {
@@ -70,11 +73,18 @@ export class DiscordCases implements Transport {
       message.guildId !== this.guildId ||
       message.author?.bot ||
       message.webhookId ||
-      ![0, 19].includes(message.type) ||
-      message.channel?.parentId !== this.config.forumId
+      ![0, 19].includes(message.type)
     )
       return false;
-    const caseId = this.store.caseForThread(message.channelId);
+    const privateId = this.store.privateCaseForThread(message.channelId);
+    const caseId =
+      message.channel?.parentId === this.config.forumId
+        ? this.store.caseForThread(message.channelId)
+        : privateId &&
+            this.store.privateProjection(privateId)?.parentId ===
+              message.channel?.parentId
+          ? privateId
+          : undefined;
     if (!caseId) return false;
     const actor = await this.actor({ user: message.author });
     if (!actor.staff) return false;
@@ -93,7 +103,7 @@ export class DiscordCases implements Transport {
       c.id,
       c.version,
       "set_processing",
-      "社管已在案件貼文回覆。",
+      "社管已在案件對話回覆。",
       "message:" + message.id,
     );
     return true;

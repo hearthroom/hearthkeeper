@@ -54,6 +54,14 @@ export interface CaseEvent {
   status: string;
   externalId: string | null;
 }
+export interface PrivateProjection {
+  caseId: string;
+  parentId: string;
+  threadId: string | null;
+  status: "queued" | "sending" | "ready";
+  projectedVersion: number;
+  events: CaseEvent[];
+}
 export interface CaseView {
   id: string;
   createdAt: number;
@@ -69,6 +77,8 @@ export interface CaseView {
   sync: "pending" | "synced";
   events: CaseEvent[];
   reporter?: string;
+  privateThreadId?: string;
+  privatePending?: boolean;
   request: string | null;
 }
 interface Row {
@@ -126,6 +136,9 @@ export class CaseStore {
   CREATE TABLE IF NOT EXISTS audit(case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,at INTEGER NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS deletions(thread_id TEXT PRIMARY KEY);
   CREATE TABLE IF NOT EXISTS member_writes(owner_key TEXT PRIMARY KEY,written_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS private_projections(case_id TEXT PRIMARY KEY REFERENCES cases(id) ON DELETE CASCADE,parent_id TEXT NOT NULL,thread_id TEXT UNIQUE,status TEXT NOT NULL DEFAULT 'queued',projected_version INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS private_events(case_id TEXT NOT NULL,seq INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'queued',external_id TEXT,PRIMARY KEY(case_id,seq),FOREIGN KEY(case_id,seq) REFERENCES events(case_id,seq) ON DELETE CASCADE);
+  CREATE TABLE IF NOT EXISTS private_deletions(thread_id TEXT PRIMARY KEY,parent_id TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS identities_owner ON identities(owner_key);
   `);
     const fingerprint = createHmac("sha256", this.key)
@@ -163,15 +176,46 @@ export class CaseStore {
       for (const line of readFileSync(ledger, "utf8")
         .split("\n")
         .filter(Boolean)) {
-        const entry = JSON.parse(line) as { threadId: string };
-        if (typeof entry.threadId !== "string")
+        const entry = JSON.parse(line) as {
+          threadId?: string;
+          caseId?: string;
+          parentId?: string;
+          kind?: string;
+          targets?: { threadId: string; parentId?: string; kind?: string }[];
+        };
+        const targets = entry.targets ?? [
+          {
+            threadId: entry.threadId!,
+            parentId: entry.parentId,
+            kind: entry.kind,
+          },
+        ];
+        if (
+          !Array.isArray(targets) ||
+          targets.some(
+            (t) =>
+              typeof t.threadId !== "string" ||
+              (t.kind === "private" && !t.parentId),
+          )
+        )
           throw new Error("Invalid deletion ledger");
-        this.db
-          .prepare("DELETE FROM cases WHERE thread_id=?")
-          .run(entry.threadId);
-        this.db
-          .prepare("INSERT OR IGNORE INTO deletions VALUES(?)")
-          .run(entry.threadId);
+        this.transaction(() => {
+          if (entry.caseId)
+            this.db.prepare("DELETE FROM cases WHERE id=?").run(entry.caseId);
+          for (const target of targets) {
+            this.db
+              .prepare("DELETE FROM cases WHERE thread_id=?")
+              .run(target.threadId);
+            if (target.kind === "private")
+              this.db
+                .prepare("INSERT OR IGNORE INTO private_deletions VALUES(?,?)")
+                .run(target.threadId, target.parentId!);
+            else
+              this.db
+                .prepare("INSERT OR IGNORE INTO deletions VALUES(?)")
+                .run(target.threadId);
+          }
+        });
       }
     }
   }
@@ -261,6 +305,12 @@ export class CaseStore {
         "INSERT INTO events(case_id,seq,kind,body,delivery_key) VALUES(?,?,?,?,?)",
       )
       .run(id, seq, kind, body, token());
+    if (!internalActions.includes(kind))
+      this.db
+        .prepare(
+          "INSERT INTO private_events(case_id,seq) SELECT case_id,? FROM private_projections WHERE case_id=?",
+        )
+        .run(seq, id);
     this.db
       .prepare("INSERT INTO operations VALUES(?,?,?)")
       .run(requestKey, id, this.actor(a));
@@ -275,6 +325,7 @@ export class CaseStore {
       body: string;
       mode: "anonymous" | "identified";
       category?: string;
+      privateParentId?: string;
     },
     requestKey: string,
   ) {
@@ -284,6 +335,8 @@ export class CaseStore {
       if (repeat) return this.read(a, repeat);
       const title = this.text(input.title, 80),
         body = this.text(input.body, 1400);
+      if (input.privateParentId && input.mode !== "identified")
+        throw new CaseError("invalid");
       if (!["anonymous", "identified"].includes(input.mode))
         throw new CaseError("invalid");
       const counts = this.db
@@ -313,6 +366,12 @@ export class CaseStore {
       this.db
         .prepare("INSERT INTO identities VALUES(?,?,?)")
         .run(id, owner, this.seal(a.userId));
+      if (input.privateParentId)
+        this.db
+          .prepare(
+            "INSERT INTO private_projections(case_id,parent_id) VALUES(?,?)",
+          )
+          .run(id, input.privateParentId);
       this.record(a, id, "submitted", body, 1, requestKey);
       return this.read(a, id);
     });
@@ -367,6 +426,14 @@ export class CaseStore {
         : events.filter((e) => !internalActions.includes(e.kind)),
       request: r.request,
     };
+    const conversation = this.privateProjection(id);
+    if (conversation) {
+      c.privatePending =
+        conversation.projectedVersion !== c.version ||
+        conversation.status !== "ready";
+      if (conversation.threadId && conversation.status === "ready")
+        c.privateThreadId = conversation.threadId;
+    }
     if (includeIdentity && r.mode === "identified") {
       const v = this.db
         .prepare("SELECT sealed FROM identities WHERE case_id=?")
@@ -652,6 +719,111 @@ export class CaseStore {
       .prepare("UPDATE cases SET projected_version=? WHERE id=?")
       .run(version, id);
   }
+  privateProjection(id: string): PrivateProjection | undefined {
+    const p = this.db
+      .prepare(
+        "SELECT case_id AS caseId,parent_id AS parentId,thread_id AS threadId,status,projected_version AS projectedVersion FROM private_projections WHERE case_id=?",
+      )
+      .get(id) as unknown as PrivateProjection | undefined;
+    if (!p) return;
+    p.events = this.db
+      .prepare(
+        "SELECT e.seq,e.kind,e.body,e.delivery_key AS deliveryKey,p.status,p.external_id AS externalId FROM private_events p JOIN events e ON e.case_id=p.case_id AND e.seq=p.seq WHERE p.case_id=? ORDER BY e.seq",
+      )
+      .all(id) as unknown as CaseEvent[];
+    return p;
+  }
+  privatePending(after = "") {
+    return (
+      this.db
+        .prepare(
+          "SELECT p.case_id FROM private_projections p JOIN cases c ON c.id=p.case_id WHERE p.case_id>? AND (p.projected_version<c.version OR p.status!='ready') ORDER BY p.case_id LIMIT 20",
+        )
+        .all(after) as { case_id: string }[]
+    ).map((r) => this.privateProjection(r.case_id)!);
+  }
+  privatePendingCount() {
+    return (
+      this.db
+        .prepare(
+          "SELECT count(*) AS n FROM private_projections p JOIN cases c ON c.id=p.case_id WHERE p.projected_version<c.version OR p.status!='ready'",
+        )
+        .get() as { n: number }
+    ).n;
+  }
+  privateParents() {
+    return (
+      this.db
+        .prepare("SELECT DISTINCT parent_id FROM private_projections")
+        .all() as { parent_id: string }[]
+    ).map((r) => r.parent_id);
+  }
+  privateCaseForThread(thread: string) {
+    return (
+      this.db
+        .prepare("SELECT case_id FROM private_projections WHERE thread_id=?")
+        .get(thread) as { case_id: string } | undefined
+    )?.case_id;
+  }
+  privateCreating(id: string) {
+    this.db
+      .prepare(
+        "UPDATE private_projections SET status='sending' WHERE case_id=? AND status='queued'",
+      )
+      .run(id);
+  }
+  privateThread(id: string, thread: string) {
+    this.db
+      .prepare("UPDATE private_projections SET thread_id=? WHERE case_id=?")
+      .run(thread, id);
+  }
+  privateSending(id: string, seq: number) {
+    this.db
+      .prepare(
+        "UPDATE private_events SET status='sending' WHERE case_id=? AND seq=?",
+      )
+      .run(id, seq);
+  }
+  privateDelivered(id: string, seq: number, message: string) {
+    this.db
+      .prepare(
+        "UPDATE private_events SET status='done',external_id=? WHERE case_id=? AND seq=?",
+      )
+      .run(message, id, seq);
+  }
+  privateSynced(id: string, version: number) {
+    this.db
+      .prepare(
+        "UPDATE private_projections SET status='ready',projected_version=? WHERE case_id=?",
+      )
+      .run(version, id);
+  }
+  privateDirty(id: string) {
+    this.db
+      .prepare(
+        "UPDATE private_projections SET projected_version=0 WHERE case_id=?",
+      )
+      .run(id);
+  }
+  privateSettled(after = "") {
+    return (
+      this.db
+        .prepare(
+          "SELECT p.case_id FROM private_projections p JOIN cases c ON c.id=p.case_id WHERE p.case_id>? AND p.status='ready' AND p.projected_version=c.version ORDER BY p.case_id LIMIT 20",
+        )
+        .all(after) as { case_id: string }[]
+    ).map((r) => this.privateProjection(r.case_id)!);
+  }
+  privateDeletions() {
+    return this.db
+      .prepare(
+        "SELECT thread_id AS threadId,parent_id AS parentId FROM private_deletions",
+      )
+      .all() as unknown as { threadId: string; parentId: string }[];
+  }
+  privateDeleted(id: string) {
+    this.db.prepare("DELETE FROM private_deletions WHERE thread_id=?").run(id);
+  }
   cleanup() {
     this.db
       .prepare("DELETE FROM member_writes WHERE written_at<?")
@@ -666,13 +838,32 @@ export class CaseStore {
       thread_id: string | null;
     }[];
     for (const r of rows) {
-      if (r.thread_id)
-        appendFileSync(
-          this.options.path + ".deletions.jsonl",
-          JSON.stringify({ threadId: r.thread_id }) + "\n",
-          { mode: 0o600, flush: true },
-        );
+      const privateCase = this.privateProjection(r.id);
+      // An uncertain create must be recovered before deleting its only durable identity.
+      if (privateCase?.status === "sending" && !privateCase.threadId) continue;
+      const targets = [
+        ...(r.thread_id ? [{ kind: "forum", threadId: r.thread_id }] : []),
+        ...(privateCase?.threadId
+          ? [
+              {
+                kind: "private",
+                threadId: privateCase.threadId,
+                parentId: privateCase.parentId,
+              },
+            ]
+          : []),
+      ];
+      // One durable receipt covers every external target before SQLite can forget the case.
+      appendFileSync(
+        this.options.path + ".deletions.jsonl",
+        JSON.stringify({ caseId: r.id, targets }) + "\n",
+        { mode: 0o600, flush: true },
+      );
       this.transaction(() => {
+        if (privateCase?.threadId)
+          this.db
+            .prepare("INSERT OR IGNORE INTO private_deletions VALUES(?,?)")
+            .run(privateCase.threadId, privateCase.parentId);
         if (r.thread_id)
           this.db
             .prepare("INSERT OR IGNORE INTO deletions VALUES(?)")
