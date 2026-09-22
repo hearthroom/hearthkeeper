@@ -129,3 +129,40 @@ SIGTERM 會將 readiness 降為 0，關閉 HTTP 與 Discord 連線。
 依 [0.5 權限表及驗收](technical-design/Private_Reports_0.5.md) 配置專用一般文字頻道與 `CASE_PRIVATE_PARENT_ID`，不改社管論壇的 @everyone deny。`CASE_PRIVATE_MAX_ACTIVE` 選填，預設 100；基礎 CASE_* 金鑰保持原值。
 
 先跑完整可信集及精確來源發布，再驗證私人入口 ready、一般成員隔離、附件和結案鎖定；不得把 source build 或單一管理員帳號視角當完整權限驗收。
+
+## 逐件審核通知
+
+先部署 Hearthroom migration 0034 與 `/internal/community/*-v2` bridge，再部署 Bot。
+在既有受限環境檔設定 `COMMUNITY_REVIEW_V2=true`；`COMMUNITY_REVIEW_LOCALE`
+預設 `zh-Hant`，亦支援 zh-Hans、en、ja、ko。沿用私人 `COMMUNITY_REVIEW_CHANNEL`
+及核准的 `CASE_STAFF_ROLE_IDS`，不新增 Discord 管理權限。Discord 管理員原有的
+隱含存取不受頻道覆寫限制；一般角色若能看到此頻道，Bot 拒絕投遞。
+
+每輪送審維持一則訊息，顯示卡名、初審／重審、通過人數、目前審核員、認領到期與
+下一步。保留盲審；不傳作者、私有人設或駁回說明。成人作品在 Discord 只顯示分級
+占位文字。認領 30 分鐘後產生一次站內提醒；Discord 私訊須同時開啟站內通知、私訊
+且綁定有效。45 分鐘到期釋放。每日臺北時間 10:00 後摘要等待超過 24 小時的作品，
+超過 48 小時標為「需協調」，不會自動裁決或點名催促。
+
+上線會補入既有待審作品。一般狀態變更由 dirty delivery 優先處理；每 10 分鐘核對
+待審訊息，每日核對終態訊息。Discord 刪文、Bot 重啟或 ack 遺失由 D1 message mapping、
+SQLite receipt／發送嘗試與有界歷史掃描恢復。SQLite 必須保留；歷史超出恢復範圍時
+停止該筆並報 failed，避免不確定情況重貼。頻道更換會在新核准頻道建立新訊息，
+不自動刪除舊頻道紀錄。終態 mapping 保留 30 天，期滿後不再修復其 Discord 訊息。
+
+部署前備份 SQLite；schema 為新增表，不刪除既有資料。回退 Bot 時把
+`COMMUNITY_REVIEW_V2=false` 後重啟，使用原有通用提醒。勿回退 D1 migration。
+新版 release／stamp 需要 claim generation；已開啟的舊審核頁需重新整理。
+Bridge 不相容時 fail closed 並記錄 failed，由設定切回舊版，避免混送兩套通知。
+
+監控：`hearthkeeper_review_delivery_total{kind,outcome}` counter，kind 只含
+main/reminder/digest，outcome 只含 sent/updated/suppressed/failed；
+`hearthkeeper_review_delivery_lag_seconds` histogram、`hearthkeeper_review_pending_deliveries`
+gauge、`hearthkeeper_review_oldest_pending_age_seconds` gauge 與
+`hearthkeeper_review_last_poll_timestamp_seconds` gauge。以 `/metrics` 讀回，或查
+`sum(increase(hearthkeeper_review_delivery_total{outcome="failed"}[15m]))`、
+`time()-hearthkeeper_review_last_poll_timestamp_seconds > 180`。未修改既有 Prometheus
+scrape／告警設定；ID、作者、內容與憑證不進 labels 或 logs。
+
+MCP：不適用。此功能為私人 Discord 通知投影；審核仍走既有受權限保護的網站流程，
+不增加外部 AI 客戶端可操作的審核工具。

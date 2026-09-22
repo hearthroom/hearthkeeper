@@ -18,6 +18,7 @@ export class CommunityStore {
     this.db
       .exec(`PRAGMA journal_mode=WAL;CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,payload TEXT NOT NULL,done INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS roles(user TEXT NOT NULL,role TEXT NOT NULL,PRIMARY KEY(user,role));
+ CREATE TABLE IF NOT EXISTS review_attempts(id TEXT NOT NULL,channel TEXT NOT NULL,started_at INTEGER NOT NULL,PRIMARY KEY(id,channel));
  CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,external_id TEXT NOT NULL,created_at INTEGER NOT NULL);`);
   }
   enqueue(event: XPEvent) {
@@ -72,6 +73,9 @@ export class CommunityStore {
       .prepare("INSERT OR REPLACE INTO deliveries VALUES(?,?,?)")
       .run(id, external, Date.now());
   }
+  beginReviewAttempt(id:string,channel:string,now:number){this.db.prepare('INSERT OR IGNORE INTO review_attempts VALUES(?,?,?)').run(id,channel,now);}
+  reviewAttempt(id:string,channel:string){return (this.db.prepare('SELECT started_at FROM review_attempts WHERE id=? AND channel=?').get(id,channel) as {started_at:number}|undefined)?.started_at;}
+  finishReviewAttempt(id:string,channel:string){this.db.prepare('DELETE FROM review_attempts WHERE id=? AND channel=?').run(id,channel);}
   close() {
     this.db.close();
   }

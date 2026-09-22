@@ -210,9 +210,22 @@ export function createRuntime(config: Config) {
     help: "Whether configured private conversation parents pass permission checks.",
     registers: [registry],
   });
+  const reviewDelivery=new Counter({name:'hearthkeeper_review_delivery_total',help:'Review notification delivery outcomes.',labelNames:['kind','outcome'],registers:[registry]});
+  const reviewLag=new Histogram({name:'hearthkeeper_review_delivery_lag_seconds',help:'Delay from durable review update to Discord acknowledgement.',buckets:[1,5,15,30,60,120,300,900],registers:[registry]});
+  const reviewPending=new Gauge({name:'hearthkeeper_review_pending_deliveries',help:'Review notifications awaiting delivery.',registers:[registry]});
+  const reviewOldest=new Gauge({name:'hearthkeeper_review_oldest_pending_age_seconds',help:'Age of the oldest undelivered review update.',registers:[registry]});
+  const reviewHealth=new Gauge({name:'hearthkeeper_review_last_poll_timestamp_seconds',help:'Last successful review queue read.',registers:[registry]});
+  reviewHealth.set(0);
   let ready = false;
   readyGauge.set(0);
   return {
+    reviewMetrics:{
+      record(kind:string,outcome:string,lag?:number){
+        reviewDelivery.inc({kind:['main','reminder','digest'].includes(kind)?kind:'main',outcome:['sent','updated','suppressed','failed'].includes(outcome)?outcome:'failed'});
+        if(lag!==undefined&&Number.isFinite(lag))reviewLag.observe(Math.max(0,lag));
+      },
+      health(count:number,oldest:number|null){reviewPending.set(count);reviewOldest.set(oldest===null?0:Math.max(0,(Date.now()-oldest)/1000));reviewHealth.set(Date.now()/1000);},
+    },
     recordCaseInteraction(kind: "command" | "button" | "modal", outcome: "success" | "failure" | "denied") {
       caseInteractions.inc({ kind, outcome });
     },

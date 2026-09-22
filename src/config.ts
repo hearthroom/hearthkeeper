@@ -1,3 +1,4 @@
+import { reviewLocales, type ReviewLocale } from './community/review-notice.js';
 import type { CommunityConfig } from "./community/bot.js";
 import { isAbsolute } from "node:path";
 import type { CaseConfig } from "./cases/discord.js";
@@ -141,7 +142,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       )
     )
       throw new Error("Invalid COMMUNITY_ROLES");
+    const reviewLocale=env.COMMUNITY_REVIEW_LOCALE??'zh-Hant';
+    if(!reviewLocales.includes(reviewLocale as ReviewLocale))throw new Error('Invalid COMMUNITY_REVIEW_LOCALE');
+    if(env.COMMUNITY_REVIEW_V2 && !['true','false'].includes(env.COMMUNITY_REVIEW_V2))throw new Error('Invalid COMMUNITY_REVIEW_V2');
     community = {
+      reviewV2:env.COMMUNITY_REVIEW_V2==='true',
+      reviewLocale:reviewLocale as ReviewLocale,
       site: site.origin,
       key,
       databasePath,
