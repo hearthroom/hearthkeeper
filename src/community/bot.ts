@@ -1,3 +1,4 @@
+import { renderReviewNotice, renderReviewReminder, reviewNonce, type ReviewJob, type ReviewLocale } from './review-notice.js';
 import {
   Client,
   ChannelType,
@@ -23,6 +24,8 @@ export interface CommunityConfig {
   channels: string[];
   roles: { id: string; level?: number; badge?: string; linked?: boolean }[];
   reviewChannel?: string;
+  reviewV2?: boolean;
+  reviewLocale?: ReviewLocale;
 }
 interface Projection {
   revision: string;
@@ -62,6 +65,7 @@ export class CommunityBot {
     readonly cases?: CaseStore,
     readonly privateParentId?: string,
     readonly record: (outcome: string) => void = () => {},
+    readonly reviewMetrics: {record:(kind:string,outcome:string,lag?:number)=>void;health:(pending:number,oldest:number|null)=>void} = {record:()=>{},health:()=>{}},
   ) {
     this.store = new CommunityStore(config.databasePath);
   }
@@ -281,8 +285,12 @@ export class CommunityBot {
     if (!this.store.delivered(id)) {
       const user = await this.client.users.fetch(n.discord_id);
       const dm = await user.createDM();
+      if(n.kind==='review_reminder') {
+        const current=await this.call<{discord_id:string}>('notification',{id});
+        if(current.discord_id!==n.discord_id) {this.reviewMetrics.record('reminder','suppressed');return;}
+      }
       const message = await dm.send({
-        content: `HearthRoom 有新的社群通知 / You have a community update.\n<${this.config.site}/me>`,
+        content: n.kind === "review_reminder" ? renderReviewReminder(this.config.site,this.config.reviewLocale) : `HearthRoom 有新的社群通知 / You have a community update.\n<${this.config.site}/me>`,
         allowedMentions: { parse: [] },
         nonce: createHash("sha256").update(id).digest("hex").slice(0, 24),
         enforceNonce: true,
@@ -290,9 +298,10 @@ export class CommunityBot {
       this.store.receipt(id, message.id);
     }
     await this.call("notification", { id, delivered: true });
+    if(n.kind==='review_reminder')this.reviewMetrics.record('reminder','sent');
   }
-  async reviewNotice(revision: string) {
-    if (!this.config.reviewChannel) return;
+  async reviewChannel() {
+    if (!this.config.reviewChannel) throw new Error("review_channel_missing");
     const channel = await this.client.channels.fetch(this.config.reviewChannel);
     if (
       !channel ||
@@ -310,6 +319,63 @@ export class CommunityBot {
         !this.staff.includes(o.id)
       )
         throw new Error("review_channel_denied");
+    // A role with guild-level ViewChannel can inherit access without an explicit allow.
+    const roles=await channel.guild.roles.fetch();
+    for(const role of roles.values()) if(role && role.id!==channel.guild.id && !this.staff.includes(role.id)
+      && !role.permissions.has(PermissionFlagsBits.Administrator) && role.tags?.botId!==this.client.user!.id && channel.permissionsFor(role)?.has(PermissionFlagsBits.ViewChannel))
+      throw new Error('review_channel_denied');
+    return channel;
+  }
+  async reviewDelivery(id:string) {
+    const channel=await this.reviewChannel();
+    const job=await this.call<ReviewJob>('review-project-v2',{id,channel:channel.id,lang:this.config.reviewLocale??'zh-Hant'});
+    try {
+      const payload=renderReviewNotice(job,this.config.site,this.config.reviewLocale);
+      let message=null;
+      const receiptKey='review-v2:'+channel.id+':'+id;
+      const knownMessage=job.messageId??this.store.delivered(receiptKey);
+      if(knownMessage) {
+        try {message=await channel.messages.fetch(knownMessage);}
+        catch(e){if(!(e instanceof DiscordAPIError && e.code===10008))throw e;}
+      }
+      // Recover a send whose success acknowledgement was lost, before creating another message.
+      if(!message){
+        const attempt=this.store.reviewAttempt(id,channel.id);
+        let before:string|undefined, reachedBoundary=false;
+        for(let page=0;page<5;page++){
+          const recent=await channel.messages.fetch({limit:100,...(before?{before}:{})});
+          const messages=[...recent.values()];
+          message=messages.find(m=>m.author.id===this.client.user!.id && m.embeds[0]?.url===payload.embeds[0]!.url)??null;
+          const oldest=messages.at(-1);
+          if(message||messages.length<100||!attempt||(oldest&&oldest.createdTimestamp<attempt-5000)){reachedBoundary=true;break;}
+          before=oldest?.id;
+        }
+        if(!message&&!reachedBoundary)throw new Error('review_send_uncertain');
+      }
+      if(message && message.author.id!==this.client.user!.id)throw new Error('review_message_denied');
+      if(!(await this.call<{valid:boolean}>('review-check-v2',{id,lease:job.lease,revision:job.revision})).valid){
+        await this.call('review-ack-v2',{id,lease:job.lease,revision:job.revision,failed:true});
+        this.reviewMetrics.record(job.kind,'suppressed');return;
+      }
+      // Recheck destination permissions immediately before sending private workflow metadata.
+      await this.reviewChannel();
+      const existing=!!message;
+      if(message)message=await message.edit({...payload,content:''});
+      else {this.store.beginReviewAttempt(id,channel.id,Date.now());message=await channel.send({...payload,nonce:reviewNonce(id),enforceNonce:true});}
+      // The API response is durable message readback, not a UI acceptance claim.
+      this.store.receipt(receiptKey,message.id);
+      this.store.finishReviewAttempt(id,channel.id);
+      await this.call('review-ack-v2',{id,lease:job.lease,revision:job.revision,channel:channel.id,messageId:message.id});
+      this.reviewMetrics.record(job.kind,existing?'updated':'sent',job.changed===false?undefined:Math.max(0,(Date.now()-job.updatedAt)/1000));
+    }catch(error){
+      this.reviewMetrics.record(job.kind,'failed');
+      await this.call('review-ack-v2',{id,lease:job.lease,revision:job.revision,failed:true}).catch(()=>{});
+      throw error;
+    }
+  }
+  async reviewNotice(revision: string) {
+    if (!this.config.reviewChannel) return;
+    const channel=await this.reviewChannel();
     if (!this.store.delivered("review:" + revision)) {
       const m = await channel.send({
         content: `有新的待審作品 / New submissions await review.\n<${this.config.site}/review>`,
@@ -356,7 +422,14 @@ export class CommunityBot {
         } catch {
           this.record("failed");
         }
-      if (pending.review)
+      if (this.config.reviewV2 && this.config.reviewChannel) {
+        try {
+          const reviews=await this.call<{version:number;jobs:{id:string}[];pending:number;oldestAt:number|null}>('review-pending-v2');
+          if(reviews.version!==2)throw new Error('review_version');
+          this.reviewMetrics.health(reviews.pending,reviews.oldestAt);
+          for(const job of reviews.jobs)try {await this.reviewDelivery(job.id);}catch {this.record('failed');}
+        }catch {this.reviewMetrics.record('main','failed');}
+      } else if (pending.review)
         try {
           await this.reviewNotice(pending.review.revision);
         } catch {
