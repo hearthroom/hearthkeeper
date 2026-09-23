@@ -11,7 +11,7 @@ Set the `COMMUNITY_*` values documented in `.env.example` in the private service
 `COMMUNITY_ROLES` is a JSON array, maximum 25 unique roles. Each object has an `id` and exactly one condition:
 
 - `level`: integer threshold from 1 to 1000; Discord-only XP roles remain after unlink.
-- `badge`: currently `first_work`, granted once from the website's approved-work decision.
+- `badge`: a badge key from the website's catalog (lowercase letters, digits and underscores, up to 60 characters), for example `first_work` or a milestone such as `creator_featured`. The website projects every active award key; the Bot only mirrors the keys listed here, so add a rule per role you want displayed.
 - `linked`: `true`, a display role for an active website link.
 
 Use only Bot-managed **display** roles with zero permissions and no granting channel overwrites. Put them below the Bot and grant the Bot Manage Roles. Staff/admin/reviewer roles and managed integration roles are rejected. Never reuse the three case staff roles as a reward. Permissions and channel overwrites are read again on every projection. A missing/unsafe configuration reports denied instead of claiming success. Existing unrelated roles and pre-existing manually granted roles are preserved; only recorded Bot grants are removed.

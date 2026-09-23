@@ -137,7 +137,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
             1 ||
           (r.level !== undefined &&
             (!Number.isInteger(r.level) || r.level < 1 || r.level > 1000)) ||
-          (r.badge !== undefined && r.badge !== "first_work") ||
+          (r.badge !== undefined &&
+            (typeof r.badge !== "string" ||
+              !/^[a-z0-9_]{1,60}$/.test(r.badge))) ||
           (r.linked !== undefined && r.linked !== true),
       )
     )
