@@ -92,6 +92,7 @@ export class CaseInteractions {
       undefined,
     private privateParentId?: string,
     private observe: (kind: "command" | "button" | "modal", outcome: "success" | "failure" | "denied") => void = () => {},
+    private site: string = "https://sukisuki.ai",
   ) {}
   private payload(content: string, components: any[] = []) {
     return { content, embeds: [], components, allowedMentions: { parse: [] }, flags: 64 };
@@ -159,13 +160,13 @@ export class CaseInteractions {
             type: 2,
             style: 5,
             label: zh ? "前往社群站" : "Visit HearthRoom",
-            url: "https://hearthroom.club",
+            url: this.site,
           },
           {
             type: 2,
             style: 5,
             label: zh ? "閱讀寫卡指南" : "Read the guide",
-            url: "https://hearthroom.club/guide",
+            url: this.site + "/guide",
           },
         ]),
       ],

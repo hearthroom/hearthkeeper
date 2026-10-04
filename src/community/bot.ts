@@ -1,4 +1,5 @@
 import { renderReviewNotice, renderReviewReminder, reviewNonce, type ReviewJob, type ReviewLocale } from './review-notice.js';
+import { renderCommunityNotice } from './notice.js';
 import {
   Client,
   ChannelType,
@@ -281,6 +282,7 @@ export class CommunityBot {
       kind: string;
       path: string;
       discord_id: string;
+      locale?: string;
     }>("notification", { id });
     if (!this.store.delivered(id)) {
       const user = await this.client.users.fetch(n.discord_id);
@@ -290,7 +292,7 @@ export class CommunityBot {
         if(current.discord_id!==n.discord_id) {this.reviewMetrics.record('reminder','suppressed');return;}
       }
       const message = await dm.send({
-        content: n.kind === "review_reminder" ? renderReviewReminder(this.config.site,this.config.reviewLocale) : `HearthRoom 有新的社群通知 / You have a community update.\n<${this.config.site}/me>`,
+        content: n.kind === "review_reminder" ? renderReviewReminder(this.config.site,this.config.reviewLocale) : renderCommunityNotice(n.kind, n.path, this.config.site, n.locale),
         allowedMentions: { parse: [] },
         nonce: createHash("sha256").update(id).digest("hex").slice(0, 24),
         enforceNonce: true,

@@ -111,7 +111,7 @@ export interface CommandInteraction {
   reply(payload: InteractionReplyOptions): Promise<unknown>;
 }
 
-function menu(zh: boolean): InteractionReplyOptions {
+function menu(zh: boolean, site: string): InteractionReplyOptions {
   return {
     flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },
@@ -126,13 +126,13 @@ function menu(zh: boolean): InteractionReplyOptions {
             type: 2,
             style: 5,
             label: zh ? "前往社群站" : "Visit HearthRoom",
-            url: "https://hearthroom.club",
+            url: site,
           },
           {
             type: 2,
             style: 5,
             label: zh ? "閱讀寫卡指南" : "Read the guide",
-            url: "https://hearthroom.club/guide",
+            url: site + "/guide",
           },
           {
             type: 2,
@@ -278,7 +278,7 @@ export function createRuntime(config: Config) {
         const zh = input.locale === "zh-TW";
         await input.reply(
           action === "menu"
-            ? menu(zh)
+            ? menu(zh, config.site)
             : {
                 content: zh
                   ? "爐邊管家可以正常回應。"

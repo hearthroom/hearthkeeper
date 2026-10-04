@@ -69,6 +69,20 @@ function interaction(
     },
   };
 }
+test("menu site buttons follow the configured site", async () => {
+  const f = setup();
+  try {
+    const ui = new CaseInteractions(f.store, "g", "app", async (i: any) => ({ guildId: i.guildId, userId: i.user.id, staff: false }), undefined, undefined, undefined, "https://example.test");
+    const menu = interaction();
+    await ui.handle(menu);
+    const body = JSON.stringify(menu.replies);
+    assert.ok(body.includes('"url":"https://example.test"'));
+    assert.ok(body.includes('"url":"https://example.test/guide"'));
+    assert.ok(!body.includes("hearthroom.club"));
+  } finally {
+    f.done();
+  }
+});
 test("menu offers working feedback and private progress entry; consent modal explains anonymity and retention", async () => {
   const f = setup();
   try {

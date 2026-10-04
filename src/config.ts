@@ -10,6 +10,20 @@ export interface Config {
   guildId: string;
   metricsHost: "127.0.0.1";
   metricsPort: number;
+  /** Website origin behind every "visit the site" button; `SITE_URL`, else the community site, else the primary domain. */
+  site: string;
+}
+const PRIMARY_SITE = "https://sukisuki.ai";
+function siteOrigin(key: string, raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`Invalid ${key}`);
+  }
+  if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash || url.username || url.password)
+    throw new Error(`Invalid ${key}`);
+  return url.origin;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -36,6 +50,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   ) {
     throw new Error("Invalid METRICS_PORT");
   }
+  const site = env.SITE_URL?.trim()
+    ? siteOrigin("SITE_URL", env.SITE_URL.trim())
+    : env.COMMUNITY_SITE_URL?.trim()
+      ? siteOrigin("COMMUNITY_SITE_URL", env.COMMUNITY_SITE_URL.trim())
+      : PRIMARY_SITE;
   let cases: CaseConfig | undefined;
   if (Object.keys(env).some((k) => k.startsWith("CASE_") && env[k])) {
     const forumId = snowflake("CASE_FORUM_ID");
@@ -79,6 +98,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       databasePath,
       privateParentId,
       privateMaxActive: Number(rawCapacity),
+      site,
     };
   }
   let community: CommunityConfig | undefined;
@@ -168,5 +188,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     metricsHost: "127.0.0.1",
     metricsPort,
     cases,
+    site,
   };
 }

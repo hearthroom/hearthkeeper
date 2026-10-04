@@ -29,6 +29,8 @@ export interface CaseConfig {
   databasePath: string;
   key: string;
   lookupKey: string;
+  /** Website origin for the menu's site buttons; the runtime config supplies it. */
+  site?: string;
 }
 export class DiscordCases implements Transport {
   readonly ui: CaseInteractions;
@@ -53,6 +55,7 @@ export class DiscordCases implements Transport {
       (name) => this.emojis.get(name),
       config.privateParentId,
       observe,
+      config.site,
     );
   }
   private async guild() {

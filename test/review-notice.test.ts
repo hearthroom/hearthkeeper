@@ -19,7 +19,7 @@ test('review delivery creates one blind card notice then edits the same message'
 import { createRuntime } from '../src/runtime.js';
 import { renderReviewNotice, reviewLocales } from '../src/community/review-notice.js';
 test('review delivery metrics expose low-cardinality outcomes and freshness',async()=>{
- const r=createRuntime({token:'fake',applicationId:'a',guildId:'g',metricsHost:'127.0.0.1',metricsPort:11940});
+ const r=createRuntime({token:'fake',applicationId:'a',guildId:'g',metricsHost:'127.0.0.1',metricsPort:11940,site:'https://sukisuki.ai'});
  (r as any).reviewMetrics.record('main','updated',3);(r as any).reviewMetrics.health(2,Date.now()-3000);
  const m=await r.metrics();assert.match(m,/hearthkeeper_review_delivery_total.*kind="main".*outcome="updated"/);assert.match(m,/hearthkeeper_review_pending_deliveries 2/);assert.match(m,/hearthkeeper_review_oldest_pending_age_seconds [3-9]/);
 });

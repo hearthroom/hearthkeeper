@@ -79,6 +79,16 @@ test("menu is private, disables mentions and has only public guide links", async
   }
 });
 
+test("menu site buttons follow the configured site instead of a hardcoded domain", async () => {
+  const runtime = createRuntime(loadConfig({ ...env, SITE_URL: "https://example.test" }));
+  const input = interaction();
+  await runtime.handle(input);
+  const [visit, guide] = (input.replies[0] as any).components[0].components;
+  assert.equal(visit.url, "https://example.test");
+  assert.equal(guide.url, "https://example.test/guide");
+  assert.ok(!JSON.stringify(input.replies).includes("hearthroom.club"));
+});
+
 test("unsupported locale falls back to English", async () => {
   const runtime = createRuntime(loadConfig(env));
   const input = interaction(undefined, undefined, "ja");
@@ -196,6 +206,7 @@ test("private conversation monitoring separates safety, pending and bounded outc
     guildId: "g",
     metricsHost: "127.0.0.1" as const,
     metricsPort: 11940,
+    site: "https://sukisuki.ai",
   };
   const r = createRuntime(config);
   r.recordPrivateDelivery("capacity");
