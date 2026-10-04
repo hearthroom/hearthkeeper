@@ -37,7 +37,7 @@ No AI service, GPU, or public inbound port is required. Moderation decisions sta
 - **Anonymous relay** — members can submit and follow up without showing their Discord account to the handling moderator.
 - **Case tracking** — claim cases, request information, reply, keep internal notes, record outcomes, close, and reopen. Forum tags reflect progress; archiving a thread is separate from closing a case.
 - **Persistent delivery** — SQLite records pending work and delivery receipts so synchronization can resume after a restart.
-- **Optional website integration** — account linking, chat XP and levels, display roles, public non-adult card previews, opt-in notifications, website cases, and verified server-boost/avatar/decoration synchronization.
+- **Optional website integration** — account linking, chat XP and levels, display roles, public non-adult card previews, opt-in notifications, a daily update digest in announcement channels, a note on reports when their change ships, website cases, and verified server-boost/avatar/decoration synchronization.
 - **Operations** — loopback health endpoints, Prometheus metrics, and a systemd service template.
 
 The built-in report categories are tailored to Hearthroom. Changing them requires code changes in `src/cases/catalog.ts` and matching forum configuration.

@@ -9,7 +9,9 @@
 建立專用 Discord Application 與 Bot，僅啟用 Guild Install，使用 `bot` 與
 `applications.commands` scopes。0.5.0 不要求 Administrator、Manage Roles、
 Moderate Members 或 Message Content／Presence／Server Members 特權 intents。
-指令回覆只對操作成員可見，不會自動發送私訊或張貼公告。
+指令回覆只對操作成員可見。唯一主動張貼的公開訊息是網站的每日更新摘要：只發到
+`COMMUNITY_UPDATES_CHANNELS` 指定的頻道，每個語言每天一則，當天修訂只編輯同一則，
+不提及任何人（見下方「每日更新摘要」）。私訊只在成員於網站開啟後才會發送。
 
 安裝目的地必須由管理員確認。只在該 guild 註冊指令；即使 bot 被加進其他 guild，
 程式仍拒絕處理其他 guild 的互動。`register` 只替換此 app 在指定 guild 的指令。
@@ -166,3 +168,27 @@ scrape／告警設定；ID、作者、內容與憑證不進 labels 或 logs。
 
 MCP：不適用。此功能為私人 Discord 通知投影；審核仍走既有受權限保護的網站流程，
 不增加外部 AI 客戶端可操作的審核工具。
+
+## 每日更新摘要與回報上線紀錄
+
+先部署 Hearthroom 的更新紀錄 migration 與 `update-*` bridge，再部署 Bot。在受限環境檔設定
+`COMMUNITY_UPDATES_CHANNELS="zh-Hant:<頻道 ID>,en:<頻道 ID>"`；語言限 zh-Hant、zh-Hans、en、
+ja、ko，每個語言一個頻道、每個頻道一個語言。頻道必須是同一伺服器裡 @everyone 看得到的文字或
+公告頻道，Bot 需要檢視頻道、傳送訊息與嵌入連結權限；不得是社管論壇、私人對話父頻道或審核頻道。
+未設定時不發摘要。
+
+網站每天臺北時間 20:00 後整理當天上線的更新，Bot 每 15 秒輪詢一次，取得後在對應頻道發一則
+嵌入訊息。48 小時內網站修訂文字或撤下更新時，Bot 編輯同一則；整天的更新都撤下時刪除該則。
+發送回應遺失時，以 SQLite 發送嘗試紀錄與有界歷史掃描找回原訊息，不重貼。訊息一律
+`allowedMentions: { parse: [] }`。
+
+更新紀錄連到 Hearthkeeper 案件時，Bot 在該案件加一則「已上線」系統紀錄：不改變狀態、已結案也
+可以加、同一更新同一案件只加一次，經原有流程同步到社管論壇、私人討論串與 `/myreports`。只有
+具名案件會把回報者的 Discord ID 回傳網站，網站據此替已綁定的成員建立站內通知；匿名案件不回傳。
+
+監控：`hearthkeeper_update_delivery_total{outcome}`（sent／updated／deleted／suppressed／failed）
+與 `hearthkeeper_update_report_total{outcome}`（delivered／missing／failed）。讀回
+`/metrics`，或查 `sum(increase(hearthkeeper_update_delivery_total{outcome="failed"}[1h]))`。
+labels 不含頻道、案件、成員或更新 ID。
+
+回退：移除 `COMMUNITY_UPDATES_CHANNELS` 後重啟即停止發摘要；已加入案件的系統紀錄保留。
