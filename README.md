@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://hearthroom.club"><img src="https://img.shields.io/badge/Hearthroom-community-E89064" alt="Hearthroom"></a>
+  <a href="https://sukisuki.ai"><img src="https://img.shields.io/badge/Hearthroom-community-E89064" alt="Hearthroom"></a>
   <a href="https://discord.gg/C7m85YPHmK"><img src="https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&amp;logoColor=white" alt="Discord"></a>
   <a href="https://github.com/hearthroom/hearthkeeper/actions/workflows/ci.yml"><img src="https://github.com/hearthroom/hearthkeeper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/hearthroom/hearthkeeper" alt="License: AGPL-3.0"></a>
@@ -225,7 +225,7 @@ Design documents include planned work. The feature list above describes the curr
 
 ## Community
 
-Join [Discord](https://discord.gg/C7m85YPHmK) for discussion and development coordination. Use [GitHub issues](https://github.com/hearthroom/hearthkeeper/issues) for reproducible bugs and feature proposals. Visit [Hearthroom](https://hearthroom.club) to explore the community this bot was built for.
+Join [Discord](https://discord.gg/C7m85YPHmK) for discussion and development coordination. Use [GitHub issues](https://github.com/hearthroom/hearthkeeper/issues) for reproducible bugs and feature proposals. Visit [Hearthroom](https://sukisuki.ai) to explore the community this bot was built for.
 
 ## Contributing
 

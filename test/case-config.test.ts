@@ -6,6 +6,15 @@ const env = {
   DISCORD_APPLICATION_ID: "100000000000000001",
   DISCORD_GUILD_ID: "100000000000000002",
 };
+test("site links default to the primary domain and accept only an https origin", () => {
+  assert.equal(loadConfig(env).site, "https://sukisuki.ai");
+  assert.equal(loadConfig({ ...env, SITE_URL: "https://example.test/" }).site, "https://example.test");
+  assert.equal(loadConfig({ ...env, COMMUNITY_SITE_URL: "https://community.test" }).site, "https://community.test");
+  assert.equal(loadConfig({ ...env, SITE_URL: "https://example.test", COMMUNITY_SITE_URL: "https://community.test" }).site, "https://example.test");
+  for (const bad of ["http://example.test", "https://example.test/path", "https://user:pw@example.test", "https://example.test/?q=1", "not a url"])
+    assert.throws(() => loadConfig({ ...env, SITE_URL: bad }), /SITE_URL/, bad);
+  assert.equal(loadConfig({ ...env, SITE_URL: "https://example.test", CASE_FORUM_ID: "100000000000000003", CASE_STAFF_ROLE_IDS: "100000000000000004", CASE_DATABASE_PATH: "/var/lib/hearthkeeper/cases.db", CASE_IDENTITY_KEY: "11".repeat(32), CASE_LOOKUP_KEY: "22".repeat(32) }).cases?.site, "https://example.test");
+});
 test("case feature is all-or-nothing and requires separate valid keys, explicit forum, roles and persistent path", () => {
   assert.equal(loadConfig(env).cases, undefined);
   assert.throws(() =>
