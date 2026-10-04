@@ -1,5 +1,6 @@
 import { renderReviewNotice, renderReviewReminder, reviewNonce, type ReviewJob, type ReviewLocale } from './review-notice.js';
 import { renderCommunityNotice } from './notice.js';
+import { renderShippedNote, renderUpdateDigest, updateNonce, type UpdateChannels, type UpdateJob } from './update-notice.js';
 import {
   Client,
   ChannelType,
@@ -27,7 +28,14 @@ export interface CommunityConfig {
   reviewChannel?: string;
   reviewV2?: boolean;
   reviewLocale?: ReviewLocale;
+  /** Public announcement channel per language for the daily update digest; absent turns digests off. */
+  updates?: UpdateChannels;
 }
+export interface UpdateMetrics {
+  delivery(outcome: "sent" | "updated" | "deleted" | "failed" | "suppressed"): void;
+  report(outcome: "delivered" | "missing" | "failed"): void;
+}
+const noUpdateMetrics: UpdateMetrics = { delivery: () => {}, report: () => {} };
 interface Projection {
   revision: string;
   xp: number;
@@ -67,6 +75,7 @@ export class CommunityBot {
     readonly privateParentId?: string,
     readonly record: (outcome: string) => void = () => {},
     readonly reviewMetrics: {record:(kind:string,outcome:string,lag?:number)=>void;health:(pending:number,oldest:number|null)=>void} = {record:()=>{},health:()=>{}},
+    readonly updateMetrics: UpdateMetrics = noUpdateMetrics,
   ) {
     this.store = new CommunityStore(config.databasePath);
   }
@@ -389,6 +398,196 @@ export class CommunityBot {
     }
     await this.call("review-ack", { revision });
   }
+  /** A public text or announcement channel in this guild where the bot may post embeds. */
+  async updateChannel(id: string) {
+    const channel = await this.client.channels.fetch(id);
+    if (
+      !channel ||
+      (channel.type !== ChannelType.GuildText &&
+        channel.type !== ChannelType.GuildAnnouncement) ||
+      channel.guildId !== this.guild ||
+      !channel
+        .permissionsFor(channel.guild.roles.everyone)
+        ?.has(PermissionFlagsBits.ViewChannel)
+    )
+      throw new Error("update_channel_denied");
+    const me = await channel.guild.members.fetchMe();
+    const own = channel.permissionsFor(me);
+    if (
+      !own?.has(PermissionFlagsBits.ViewChannel) ||
+      !own.has(PermissionFlagsBits.SendMessages) ||
+      !own.has(PermissionFlagsBits.EmbedLinks)
+    )
+      throw new Error("update_channel_denied");
+    return channel;
+  }
+  async updateDelivery(day: string, locale: string, channelId: string) {
+    const channel = await this.updateChannel(channelId);
+    const job = await this.call<UpdateJob>("update-project", {
+      day,
+      locale,
+      channel: channel.id,
+    });
+    const receiptKey = `update:${channel.id}:${day}:${locale}`;
+    try {
+      const empty = !job.digest.items.length && !job.digest.fixes.length;
+      const payload = empty ? null : renderUpdateDigest(job.digest);
+      let message: Message | null = null;
+      const known = job.messageId ?? this.store.delivered(receiptKey);
+      if (known) {
+        try {
+          message = await channel.messages.fetch(known);
+        } catch (e) {
+          if (!(e instanceof DiscordAPIError && e.code === 10008)) throw e;
+        }
+      }
+      // A send whose response was lost: find our own message before posting a second copy.
+      const attempt = this.store.reviewAttempt(receiptKey, channel.id);
+      if (!message && attempt) {
+        const embed = renderUpdateDigest(job.digest).embeds[0]!;
+        let before: string | undefined,
+          reachedBoundary = false;
+        for (let page = 0; page < 5; page++) {
+          const recent = await channel.messages.fetch({
+            limit: 100,
+            ...(before ? { before } : {}),
+          });
+          const messages = [...recent.values()];
+          message =
+            messages.find(
+              (m) =>
+                m.author.id === this.client.user!.id &&
+                m.embeds[0]?.title === embed.title &&
+                (m.embeds[0]?.url ?? undefined) === embed.url,
+            ) ?? null;
+          const oldest = messages.at(-1);
+          if (
+            message ||
+            messages.length < 100 ||
+            (oldest && oldest.createdTimestamp < attempt - 5000)
+          ) {
+            reachedBoundary = true;
+            break;
+          }
+          before = oldest?.id;
+        }
+        if (!message && !reachedBoundary) throw new Error("update_send_uncertain");
+      }
+      if (message && message.author.id !== this.client.user!.id)
+        throw new Error("update_message_denied");
+      if (empty) {
+        if (message) await message.delete();
+        this.store.finishReviewAttempt(receiptKey, channel.id);
+        const r = await this.call<{ accepted: boolean }>("update-ack", {
+          day,
+          locale,
+          lease: job.lease,
+          revision: job.revision,
+          channel: channel.id,
+          deleted: true,
+        });
+        this.updateMetrics.delivery(r.accepted ? "deleted" : "suppressed");
+        return;
+      }
+      // Recheck right before posting: a channel can turn private between the poll and the send.
+      await this.updateChannel(channel.id);
+      const existing = !!message;
+      if (message) message = await message.edit({ ...payload!, content: "" });
+      else {
+        this.store.beginReviewAttempt(receiptKey, channel.id, Date.now());
+        message = await channel.send({
+          ...payload!,
+          nonce: updateNonce(day, locale, job.revision),
+          enforceNonce: true,
+        });
+      }
+      this.store.receipt(receiptKey, message.id);
+      this.store.finishReviewAttempt(receiptKey, channel.id);
+      const r = await this.call<{ accepted: boolean }>("update-ack", {
+        day,
+        locale,
+        lease: job.lease,
+        revision: job.revision,
+        channel: channel.id,
+        messageId: message.id,
+      });
+      this.updateMetrics.delivery(
+        !r.accepted ? "suppressed" : existing ? "updated" : "sent",
+      );
+    } catch (error) {
+      this.updateMetrics.delivery("failed");
+      await this.call("update-ack", {
+        day,
+        locale,
+        lease: job.lease,
+        revision: job.revision,
+        failed: true,
+      }).catch(() => {});
+      throw error;
+    }
+  }
+  /** Adds the "this shipped" note to a report; only identified reports tell the website who filed them. */
+  async updateReport(entry: string, caseId: string) {
+    if (!this.cases) return;
+    let outcome: "delivered" | "missing" | "failed" = "failed",
+      reporter: string | undefined;
+    if (!/^[a-f0-9]{24}$/.test(caseId)) outcome = "missing";
+    else {
+      const job = await this.call<{ titles: Record<string, unknown>; url: unknown }>(
+        "update-report",
+        { entry, case: caseId },
+      );
+      try {
+        const result = this.cases.shipped(
+          caseId,
+          renderShippedNote(job.titles ?? {}, job.url),
+          `shipped:${entry}:${caseId}`,
+        );
+        if (!result) outcome = "missing";
+        else {
+          outcome = "delivered";
+          if (result.mode === "identified" && result.reporter)
+            reporter = result.reporter;
+        }
+      } catch {
+        outcome = "failed";
+      }
+    }
+    await this.call("update-report-ack", {
+      entry,
+      case: caseId,
+      outcome,
+      ...(reporter ? { reporter } : {}),
+    });
+    this.updateMetrics.report(outcome);
+  }
+  async updates() {
+    const channels = this.config.updates ?? {};
+    const locales = Object.keys(channels);
+    if (!locales.length && !this.cases) return;
+    const pending = await this.call<{
+      version: number;
+      digests: { day: string; locale: string }[];
+      reports: { entry: string; case: string }[];
+    }>("update-pending", { locales });
+    if (pending.version !== 1) throw new Error("update_version");
+    for (const d of pending.digests) {
+      const channel = channels[d.locale as keyof UpdateChannels];
+      if (!channel) continue;
+      try {
+        await this.updateDelivery(d.day, d.locale, channel);
+      } catch {
+        // counted as failed inside updateDelivery; the website retries on the next poll
+      }
+    }
+    if (this.cases)
+      for (const r of pending.reports)
+        try {
+          await this.updateReport(r.entry, r.case);
+        } catch {
+          this.updateMetrics.report("failed");
+        }
+  }
   async tick() {
     if (this.running || !this.client.isReady()) return;
     this.running = true;
@@ -437,6 +636,11 @@ export class CommunityBot {
         } catch {
           this.record("denied");
         }
+      try {
+        await this.updates();
+      } catch {
+        this.updateMetrics.delivery("failed");
+      }
     } catch {
       this.record("failed");
     } finally {

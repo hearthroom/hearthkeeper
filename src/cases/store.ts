@@ -635,6 +635,44 @@ export class CaseStore {
       return this.read(a, id);
     });
   }
+  /**
+   * A website release note says this case's change has shipped. It is a system event, not a staff
+   * action: it never changes state, it is allowed on closed cases, and it reaches the reporter
+   * through the same paths as a staff reply (forum thread, private thread, /myreports).
+   * Idempotent per `key`. Returns null when the case no longer exists (cleaned up or unknown).
+   */
+  shipped(
+    caseId: string,
+    body: string,
+    key: string,
+  ): { mode: "anonymous" | "identified"; reporter?: string } | null {
+    return this.transaction(() => {
+      const r = this.db
+        .prepare("SELECT * FROM cases WHERE id=? AND guild=?")
+        .get(caseId, this.options.guildId) as unknown as Row | undefined;
+      if (!r) return null;
+      const system: Actor = {
+        guildId: this.options.guildId,
+        userId: "system",
+        staff: true,
+      };
+      const requestKey = "system:" + key;
+      if (!this.replay(system, requestKey)) {
+        const text = this.text(body, 1400);
+        this.db
+          .prepare("UPDATE cases SET version=version+1 WHERE id=?")
+          .run(caseId);
+        this.record(system, caseId, "shipped", text, r.version + 1, requestKey);
+      }
+      if (r.mode !== "identified") return { mode: r.mode };
+      const v = this.db
+        .prepare("SELECT sealed FROM identities WHERE case_id=?")
+        .get(caseId) as { sealed: string } | undefined;
+      return v
+        ? { mode: "identified", reporter: this.unseal(v.sealed) }
+        : { mode: "identified" };
+    });
+  }
   action(
     a: Actor,
     id: string,

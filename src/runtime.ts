@@ -215,6 +215,8 @@ export function createRuntime(config: Config) {
   const reviewPending=new Gauge({name:'hearthkeeper_review_pending_deliveries',help:'Review notifications awaiting delivery.',registers:[registry]});
   const reviewOldest=new Gauge({name:'hearthkeeper_review_oldest_pending_age_seconds',help:'Age of the oldest undelivered review update.',registers:[registry]});
   const reviewHealth=new Gauge({name:'hearthkeeper_review_last_poll_timestamp_seconds',help:'Last successful review queue read.',registers:[registry]});
+  const updateDelivery=new Counter({name:'hearthkeeper_update_delivery_total',help:'Daily update digest delivery outcomes.',labelNames:['outcome'],registers:[registry]});
+  const updateReport=new Counter({name:'hearthkeeper_update_report_total',help:'Shipped notes added to reports.',labelNames:['outcome'],registers:[registry]});
   reviewHealth.set(0);
   let ready = false;
   readyGauge.set(0);
@@ -225,6 +227,10 @@ export function createRuntime(config: Config) {
         if(lag!==undefined&&Number.isFinite(lag))reviewLag.observe(Math.max(0,lag));
       },
       health(count:number,oldest:number|null){reviewPending.set(count);reviewOldest.set(oldest===null?0:Math.max(0,(Date.now()-oldest)/1000));reviewHealth.set(Date.now()/1000);},
+    },
+    updateMetrics:{
+      delivery(outcome:string){updateDelivery.inc({outcome:['sent','updated','deleted','failed','suppressed'].includes(outcome)?outcome:'failed'});},
+      report(outcome:string){updateReport.inc({outcome:['delivered','missing','failed'].includes(outcome)?outcome:'failed'});},
     },
     recordCaseInteraction(kind: "command" | "button" | "modal", outcome: "success" | "failure" | "denied") {
       caseInteractions.inc({ kind, outcome });
