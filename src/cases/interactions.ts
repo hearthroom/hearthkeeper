@@ -64,6 +64,7 @@ export const eventName = (kind: string, zh = true) =>
     not_adopted: zh ? "未採納・關閉並鎖定" : "Not adopted · close and lock",
     thread_state: zh ? "Discord 貼文狀態更新" : "Discord post state updated",
     restore: zh ? "恢復貼文" : "Restore post",
+    shipped: zh ? "已上線" : "Shipped",
   })[kind] ?? kind;
 export function forumContent(c: CaseView, e: CaseView["events"][number]) {
   if (e.seq === 1) {

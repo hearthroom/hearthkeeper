@@ -68,6 +68,7 @@ async function start() {
         config.cases?.privateParentId,
         runtime.recordCommunity,
         runtime.reviewMetrics,
+        runtime.updateMetrics,
       )
     : undefined;
   const communityTimer = setInterval(() => void community?.tick(), 15000);

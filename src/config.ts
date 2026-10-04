@@ -1,4 +1,5 @@
 import { reviewLocales, type ReviewLocale } from './community/review-notice.js';
+import { parseUpdateChannels } from './community/update-notice.js';
 import type { CommunityConfig } from "./community/bot.js";
 import { isAbsolute } from "node:path";
 import type { CaseConfig } from "./cases/discord.js";
@@ -167,6 +168,21 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     const reviewLocale=env.COMMUNITY_REVIEW_LOCALE??'zh-Hant';
     if(!reviewLocales.includes(reviewLocale as ReviewLocale))throw new Error('Invalid COMMUNITY_REVIEW_LOCALE');
     if(env.COMMUNITY_REVIEW_V2 && !['true','false'].includes(env.COMMUNITY_REVIEW_V2))throw new Error('Invalid COMMUNITY_REVIEW_V2');
+    const reviewChannel = env.COMMUNITY_REVIEW_CHANNEL
+      ? snowflake("COMMUNITY_REVIEW_CHANNEL")
+      : undefined;
+    const updates = parseUpdateChannels(env.COMMUNITY_UPDATES_CHANNELS);
+    // Update digests are public posts: they may never land in a staff-only or private destination.
+    if (
+      updates &&
+      Object.values(updates).some(
+        (id) =>
+          id === cases?.forumId ||
+          id === cases?.privateParentId ||
+          id === reviewChannel,
+      )
+    )
+      throw new Error("Invalid COMMUNITY_UPDATES_CHANNELS");
     community = {
       reviewV2:env.COMMUNITY_REVIEW_V2==='true',
       reviewLocale:reviewLocale as ReviewLocale,
@@ -175,9 +191,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       databasePath,
       channels,
       roles,
-      reviewChannel: env.COMMUNITY_REVIEW_CHANNEL
-        ? snowflake("COMMUNITY_REVIEW_CHANNEL")
-        : undefined,
+      reviewChannel,
+      ...(updates ? { updates } : {}),
     };
   }
   return {
