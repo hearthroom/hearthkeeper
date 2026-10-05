@@ -36,6 +36,8 @@ export interface UpdateMetrics {
   report(outcome: "delivered" | "missing" | "failed"): void;
 }
 const noUpdateMetrics: UpdateMetrics = { delivery: () => {}, report: () => {} };
+/** Matches how long the website keeps a digest editable; older owed channels are dropped. */
+const UPDATE_RETRY_WINDOW = 48 * 3_600_000;
 interface Projection {
   revision: string;
   xp: number;
@@ -498,7 +500,7 @@ export class CommunityBot {
         this.store.beginReviewAttempt(receiptKey, channel.id, Date.now());
         message = await channel.send({
           ...payload!,
-          nonce: updateNonce(day, locale, job.revision),
+          nonce: updateNonce(day, locale, job.revision, channel.id),
           enforceNonce: true,
         });
       }
@@ -572,15 +574,41 @@ export class CommunityBot {
       reports: { entry: string; case: string }[];
     }>("update-pending", { locales });
     if (pending.version !== 1) throw new Error("update_version");
+    const now = Date.now(),
+      tried = new Set<string>();
+    const deliver = async (day: string, locale: string, channel: string) => {
+      tried.add(`${channel}:${day}:${locale}`);
+      try {
+        await this.updateDelivery(day, locale, channel);
+        this.store.settleUpdate(day, locale, channel);
+      } catch (error) {
+        // A refused or failed channel never blocks the next one, and stays owed until it gets the digest.
+        this.store.oweUpdate(day, locale, channel, now);
+        const e = error as { code?: unknown; message?: unknown };
+        console.log(
+          JSON.stringify({
+            event: "update_delivery_failed",
+            day,
+            locale,
+            channel,
+            code: e?.code ?? null,
+            error: String(e?.message ?? error).slice(0, 200),
+          }),
+        );
+      }
+    };
     for (const d of pending.digests)
       // Each channel takes its own lease, post or edit, and ack. The website remembers only the last
       // channel's message; every other channel edits through this bot's own receipt for it.
       for (const channel of channels[d.locale as keyof UpdateChannels] ?? [])
-        try {
-          await this.updateDelivery(d.day, d.locale, channel);
-        } catch {
-          // counted as failed inside updateDelivery; a refused channel never blocks the next one
-        }
+        await deliver(d.day, d.locale, channel);
+    // The website stops listing a digest once any channel acks it, so channels that missed it retry here.
+    for (const o of this.store.owedUpdates(now - UPDATE_RETRY_WINDOW))
+      if (
+        !tried.has(`${o.channel}:${o.day}:${o.locale}`) &&
+        (channels[o.locale as keyof UpdateChannels] ?? []).includes(o.channel)
+      )
+        await deliver(o.day, o.locale, o.channel);
     if (this.cases)
       for (const r of pending.reports)
         try {
