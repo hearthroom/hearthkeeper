@@ -292,6 +292,7 @@ export class CommunityBot {
       path: string;
       discord_id: string;
       locale?: string;
+      text?: string;
     }>("notification", { id });
     if (!this.store.delivered(id)) {
       const user = await this.client.users.fetch(n.discord_id);
@@ -301,7 +302,7 @@ export class CommunityBot {
         if(current.discord_id!==n.discord_id) {this.reviewMetrics.record('reminder','suppressed');return;}
       }
       const message = await dm.send({
-        content: n.kind === "review_reminder" ? renderReviewReminder(this.config.site,this.config.reviewLocale) : renderCommunityNotice(n.kind, n.path, this.config.site, n.locale),
+        content: n.kind === "review_reminder" ? renderReviewReminder(this.config.site,this.config.reviewLocale) : renderCommunityNotice(n.text, n.path, this.config.site, n.locale),
         allowedMentions: { parse: [] },
         nonce: createHash("sha256").update(id).digest("hex").slice(0, 24),
         enforceNonce: true,

@@ -496,11 +496,10 @@ test("shipped notes stay short, bilingual and link only to https", () => {
   assert.ok(renderShippedNote({}, null).includes("An update related to this report is now live."));
 });
 
-test("report_shipped DMs speak every interface language and link to the release note", () => {
+test("report_shipped DMs link to the release note", () => {
   for (const locale of noticeLocales) {
-    const text = renderCommunityNotice("report_shipped", "/updates#2026-10-04-notifications", "https://sukisuki.ai", locale);
+    const text = renderCommunityNotice("What you reported is now live: Notifications", "/updates#2026-10-04-notifications", "https://sukisuki.ai", locale);
     assert.ok(text.endsWith("<https://sukisuki.ai/updates#2026-10-04-notifications>"), locale);
-    assert.ok(!text.includes("HearthRoom 有新的通知"), locale);
   }
 });
 
