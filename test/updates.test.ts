@@ -120,7 +120,7 @@ interface FakeMessage {
   delete: () => Promise<void>;
 }
 function fakeChannel(opts: { public?: boolean; canSend?: boolean } = {}) {
-  const state = { sent: 0, edited: 0, deleted: 0, lose: false, payloads: [] as any[], messages: new Map<string, FakeMessage>() };
+  const state = { sent: 0, edited: 0, deleted: 0, lose: false, fail: false, payloads: [] as any[], messages: new Map<string, FakeMessage>() };
   const make = (id: string, p: any): FakeMessage => {
     const m: FakeMessage = {
       id,
@@ -163,6 +163,10 @@ function fakeChannel(opts: { public?: boolean; canSend?: boolean } = {}) {
       },
     },
     send: async (p: any) => {
+      if (state.fail) {
+        state.fail = false;
+        throw new Error("send refused");
+      }
       state.sent++;
       state.payloads.push(p);
       const m = make(String(400000000000000000n + BigInt(state.sent)), p);
@@ -412,6 +416,86 @@ test("a language with two channels posts to both, edits both, and one refused ch
     assert.equal(board.state.edited, 1);
     assert.equal(lobby.state.edited, 2);
     assert.deepEqual(seen, ["delivery:sent", "delivery:sent", "delivery:updated", "delivery:updated", "delivery:updated"]);
+  } finally {
+    bot.store.close();
+  }
+});
+
+test("a channel that fails after another channel already delivered the digest is retried on its own", async () => {
+  const board = fakeChannel(),
+    lobby = fakeChannel();
+  board.channel.id = ZH;
+  lobby.channel.id = EN;
+  lobby.state.fail = true;
+  const byId: Record<string, any> = { [ZH]: board.channel, [EN]: lobby.channel };
+  const { m, seen } = metrics();
+  const client = { user: { id: "bot" }, isReady: () => true, channels: { fetch: async (id: string) => byId[id] } } as unknown as Client;
+  const bot = new CommunityBot(
+    client,
+    "guild",
+    { site: "https://sukisuki.ai", key: "a".repeat(64), databasePath: ":memory:", channels: [], roles: [], updates: { "zh-Hans": [ZH, EN] } },
+    [],
+    undefined,
+    undefined,
+    () => {},
+    undefined,
+    m,
+  );
+  // The website tracks one delivery per day and language, so once the board acks it stops listing the digest.
+  let delivered = 0;
+  const projected: string[] = [];
+  bot.call = async <T>(op: string, b: Record<string, unknown> = {}) => {
+    if (op === "events") return { receipts: [] } as T;
+    if (op === "pending") return { subjects: [], jobs: [], notifications: [], review: null } as T;
+    if (op === "update-pending")
+      return { version: 1, digests: delivered < 1 ? [{ day: "2026-10-05", locale: "zh-Hans" }] : [], reports: [] } as T;
+    if (op === "update-project") {
+      projected.push(String(b.channel));
+      return { day: "2026-10-05", locale: "zh-Hans", revision: 1, lease: "L", messageId: null, digest: digest() } as T;
+    }
+    if (op === "update-ack") {
+      if (b.messageId) delivered = Number(b.revision);
+      return { accepted: true } as T;
+    }
+    throw new Error("unexpected " + op);
+  };
+  const log = console.log;
+  const logged: string[] = [];
+  console.log = (line: string) => void logged.push(line);
+  try {
+    await bot.tick();
+    assert.equal(board.state.sent, 1);
+    assert.equal(lobby.state.sent, 0);
+    assert.ok(logged.some((l) => l.includes("update_delivery_failed") && l.includes("send refused")), "the failure is logged");
+    await bot.tick();
+    assert.equal(lobby.state.sent, 1, "the lobby gets the digest without a new revision");
+    assert.equal(board.state.sent, 1);
+    await bot.tick();
+    assert.equal(lobby.state.sent, 1, "a delivered channel is not owed again");
+    assert.deepEqual(projected, [ZH, EN, EN]);
+    assert.deepEqual(seen, ["delivery:sent", "delivery:failed", "delivery:sent"]);
+    assert.notEqual(board.state.payloads[0].nonce, lobby.state.payloads[0].nonce, "each channel has its own nonce");
+  } finally {
+    console.log = log;
+    bot.store.close();
+  }
+});
+
+test("an unfinished send left by an older release is still owed", async () => {
+  const { channel, state } = fakeChannel();
+  const { m } = metrics();
+  const bot = updateBot(channel, m);
+  bot.store.beginReviewAttempt(`update:${ZH}:2026-10-05:zh-Hant`, ZH, Date.now() - 60_000);
+  bot.call = async <T>(op: string) => {
+    if (op === "events") return { receipts: [] } as T;
+    if (op === "pending") return { subjects: [], jobs: [], notifications: [], review: null } as T;
+    if (op === "update-pending") return { version: 1, digests: [], reports: [] } as T;
+    if (op === "update-project") return { day: "2026-10-05", locale: "zh-Hant", revision: 1, lease: "L", messageId: null, digest: digest() } as T;
+    return { accepted: true } as T;
+  };
+  try {
+    await bot.tick();
+    assert.equal(state.sent, 1);
   } finally {
     bot.store.close();
   }

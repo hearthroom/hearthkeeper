@@ -117,8 +117,8 @@ export function renderUpdateDigest(d: UpdateDigest) {
   };
 }
 
-export function updateNonce(day: string, locale: string, revision: number): string {
-  return createHash("sha256").update(`update:${day}:${locale}:${revision}`).digest("hex").slice(0, 24);
+export function updateNonce(day: string, locale: string, revision: number, channel: string): string {
+  return createHash("sha256").update(`update:${channel}:${day}:${locale}:${revision}`).digest("hex").slice(0, 24);
 }
 
 /**

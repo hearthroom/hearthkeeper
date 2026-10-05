@@ -19,7 +19,8 @@ export class CommunityStore {
       .exec(`PRAGMA journal_mode=WAL;CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,payload TEXT NOT NULL,done INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS roles(user TEXT NOT NULL,role TEXT NOT NULL,PRIMARY KEY(user,role));
  CREATE TABLE IF NOT EXISTS review_attempts(id TEXT NOT NULL,channel TEXT NOT NULL,started_at INTEGER NOT NULL,PRIMARY KEY(id,channel));
- CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,external_id TEXT NOT NULL,created_at INTEGER NOT NULL);`);
+ CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,external_id TEXT NOT NULL,created_at INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS update_owed(day TEXT NOT NULL,locale TEXT NOT NULL,channel TEXT NOT NULL,since INTEGER NOT NULL,PRIMARY KEY(day,locale,channel));`);
   }
   enqueue(event: XPEvent) {
     this.db
@@ -76,6 +77,19 @@ export class CommunityStore {
   beginReviewAttempt(id:string,channel:string,now:number){this.db.prepare('INSERT OR IGNORE INTO review_attempts VALUES(?,?,?)').run(id,channel,now);}
   reviewAttempt(id:string,channel:string){return (this.db.prepare('SELECT started_at FROM review_attempts WHERE id=? AND channel=?').get(id,channel) as {started_at:number}|undefined)?.started_at;}
   finishReviewAttempt(id:string,channel:string){this.db.prepare('DELETE FROM review_attempts WHERE id=? AND channel=?').run(id,channel);}
+  /** A digest a channel still has to receive; the website only tracks one delivery per day and language. */
+  oweUpdate(day:string,locale:string,channel:string,now:number){this.db.prepare('INSERT OR IGNORE INTO update_owed VALUES(?,?,?,?)').run(day,locale,channel,now);}
+  settleUpdate(day:string,locale:string,channel:string){this.db.prepare('DELETE FROM update_owed WHERE day=? AND locale=? AND channel=?').run(day,locale,channel);}
+  /** Owed digests, including sends an older release left unfinished (an attempt row with no receipt). */
+  owedUpdates(after:number){
+    this.db.prepare('DELETE FROM update_owed WHERE since<=?').run(after);
+    const owed=this.db.prepare('SELECT day,locale,channel FROM update_owed WHERE since>?').all(after) as {day:string;locale:string;channel:string}[];
+    for(const a of this.db.prepare("SELECT id,channel FROM review_attempts WHERE id LIKE 'update:%' AND started_at>?").all(after) as {id:string;channel:string}[]){
+      const [,channel,day,locale]=a.id.split(':');
+      if(channel===a.channel&&day&&locale&&!owed.some(o=>o.day===day&&o.locale===locale&&o.channel===channel))owed.push({day,locale,channel});
+    }
+    return owed;
+  }
   close() {
     this.db.close();
   }
