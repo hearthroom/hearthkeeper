@@ -175,7 +175,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     // Update digests are public posts: they may never land in a staff-only or private destination.
     if (
       updates &&
-      Object.values(updates).some(
+      Object.values(updates).flat().some(
         (id) =>
           id === cases?.forumId ||
           id === cases?.privateParentId ||

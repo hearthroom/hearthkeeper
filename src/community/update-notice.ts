@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
  */
 export const updateLocales = ["zh-Hant", "zh-Hans", "en", "ja", "ko"] as const;
 export type UpdateLocale = (typeof updateLocales)[number];
-export type UpdateChannels = Partial<Record<UpdateLocale, string>>;
+export type UpdateChannels = Partial<Record<UpdateLocale, string[]>>;
 
 export interface UpdateItem {
   tier?: "highlight" | "feature";
@@ -36,9 +36,10 @@ export interface UpdateJob {
 }
 
 /**
- * `COMMUNITY_UPDATES_CHANNELS="zh-Hant:<channel id>,en:<channel id>"`.
- * Absent or blank turns the digests off. One channel per language and one language per channel,
- * so a misconfiguration can never post the same day twice into one place.
+ * `COMMUNITY_UPDATES_CHANNELS="zh-Hans:<notice board id>,zh-Hans:<lobby id>,en:<channel id>"`.
+ * Absent or blank turns the digests off. A language may list several channels (posted in that
+ * order); a channel appears once and serves one language, so a misconfiguration can never post
+ * the same day twice into one place.
  */
 export function parseUpdateChannels(raw: string | undefined): UpdateChannels | undefined {
   const value = raw?.trim();
@@ -50,9 +51,9 @@ export function parseUpdateChannels(raw: string | undefined): UpdateChannels | u
     if (!match) throw new Error("Invalid COMMUNITY_UPDATES_CHANNELS");
     const locale = match[1] as UpdateLocale,
       channel = match[2]!;
-    if (!updateLocales.includes(locale) || out[locale] || seen.has(channel))
+    if (!updateLocales.includes(locale) || seen.has(channel))
       throw new Error("Invalid COMMUNITY_UPDATES_CHANNELS");
-    out[locale] = channel;
+    (out[locale] ??= []).push(channel);
     seen.add(channel);
   }
   if (!Object.keys(out).length) throw new Error("Invalid COMMUNITY_UPDATES_CHANNELS");

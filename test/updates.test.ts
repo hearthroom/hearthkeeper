@@ -30,16 +30,21 @@ const env = {
   COMMUNITY_DATABASE_PATH: "/var/lib/hearthkeeper/community.db",
 };
 
-test("update channels are optional, one per language, and never a private destination", () => {
+test("update channels are optional, may repeat a language, and never a private destination", () => {
   assert.equal(loadConfig(env).community?.updates, undefined);
   assert.deepEqual(
     loadConfig({ ...env, COMMUNITY_UPDATES_CHANNELS: ` zh-Hant:${ZH} , en:${EN} ` }).community?.updates,
-    { "zh-Hant": ZH, en: EN },
+    { "zh-Hant": [ZH], en: [EN] },
+  );
+  // One language can go to several channels (a notice board and the lobby), in the configured order.
+  assert.deepEqual(
+    loadConfig({ ...env, COMMUNITY_UPDATES_CHANNELS: `zh-Hans:${ZH},zh-Hans:${EN}` }).community?.updates,
+    { "zh-Hans": [ZH, EN] },
   );
   for (const bad of [
     `zh-TW:${ZH}`,
     "zh-Hant:123",
-    `zh-Hant:${ZH},zh-Hant:${EN}`,
+    `zh-Hant:${ZH},zh-Hant:${ZH}`,
     `zh-Hant:${ZH},en:${ZH}`,
     `zh-Hant ${ZH}`,
     ",",
@@ -181,7 +186,7 @@ function updateBot(channel: any, m: UpdateMetrics, cases?: CaseStore) {
   return new CommunityBot(
     client,
     "guild",
-    { site: "https://sukisuki.ai", key: "a".repeat(64), databasePath: ":memory:", channels: [], roles: [], updates: { "zh-Hant": ZH } },
+    { site: "https://sukisuki.ai", key: "a".repeat(64), databasePath: ":memory:", channels: [], roles: [], updates: { "zh-Hant": [ZH] } },
     [],
     cases,
     undefined,
@@ -342,6 +347,71 @@ test("the poll asks only for configured languages and skips digests for language
     assert.deepEqual(calls[1]![1].locales, ["zh-Hant"]);
     assert.equal(calls[2]![1].locale, "zh-Hant");
     assert.equal(state.sent, 1);
+  } finally {
+    bot.store.close();
+  }
+});
+
+test("a language with two channels posts to both, edits both, and one refused channel does not block the other", async () => {
+  const board = fakeChannel({ canSend: false }),
+    lobby = fakeChannel();
+  board.channel.id = ZH;
+  lobby.channel.id = EN;
+  const byId: Record<string, any> = { [ZH]: board.channel, [EN]: lobby.channel };
+  const { m, seen } = metrics();
+  const client = { user: { id: "bot" }, isReady: () => true, channels: { fetch: async (id: string) => byId[id] } } as unknown as Client;
+  const bot = new CommunityBot(
+    client,
+    "guild",
+    { site: "https://sukisuki.ai", key: "a".repeat(64), databasePath: ":memory:", channels: [], roles: [], updates: { "zh-Hans": [ZH, EN] } },
+    [],
+    undefined,
+    undefined,
+    () => {},
+    undefined,
+    m,
+  );
+  // The website keeps one delivery per day and language; it hands back the message of the last channel acked.
+  let site = { channel: null as string | null, message: null as string | null, delivered: 0 };
+  let revision = 1,
+    current = digest();
+  const projected: string[] = [];
+  bot.call = async <T>(op: string, b: Record<string, unknown> = {}) => {
+    if (op === "events") return { receipts: [] } as T;
+    if (op === "pending") return { subjects: [], jobs: [], notifications: [], review: null } as T;
+    if (op === "update-pending")
+      return { version: 1, digests: site.delivered < revision ? [{ day: "2026-10-05", locale: "zh-Hans" }] : [], reports: [] } as T;
+    if (op === "update-project") {
+      projected.push(String(b.channel));
+      return { day: "2026-10-05", locale: "zh-Hans", revision, lease: "L", messageId: site.channel === b.channel ? site.message : null, digest: current } as T;
+    }
+    if (op === "update-ack") {
+      if (b.messageId) site = { channel: String(b.channel), message: String(b.messageId), delivered: Number(b.revision) };
+      return { accepted: true } as T;
+    }
+    throw new Error("unexpected " + op);
+  };
+  try {
+    await bot.tick();
+    assert.equal(board.state.sent, 0, "the refused notice board gets nothing");
+    assert.equal(lobby.state.sent, 1, "the lobby still gets the digest");
+    assert.deepEqual(projected, [EN], "no website lease is taken for the refused channel");
+    // The notice board gains permission; the next revision reaches both, each editing or posting its own message.
+    board.channel.permissionsFor = (who: any) => ({ has: (flag: bigint) => (who === board.channel.guild.roles.everyone ? flag === PermissionFlagsBits.ViewChannel : true) });
+    revision = 2;
+    current = digest({ fixes: [] });
+    await bot.tick();
+    assert.equal(board.state.sent, 1);
+    assert.equal(lobby.state.sent, 1);
+    assert.equal(lobby.state.edited, 1, "the lobby message is edited from the bot's own receipt");
+    assert.deepEqual(projected, [EN, ZH, EN]);
+    revision = 3;
+    current = digest({ items: [{ tier: "highlight", title: "改過", url: "https://sukisuki.ai/updates?from=discord#x" }] });
+    await bot.tick();
+    assert.equal(board.state.sent, 1);
+    assert.equal(board.state.edited, 1);
+    assert.equal(lobby.state.edited, 2);
+    assert.deepEqual(seen, ["delivery:sent", "delivery:sent", "delivery:updated", "delivery:updated", "delivery:updated"]);
   } finally {
     bot.store.close();
   }
