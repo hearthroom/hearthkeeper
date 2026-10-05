@@ -38,10 +38,10 @@ test('private review channels accept inherent administrator access but reject or
  const bot=new CommunityBot({user:{id:'bot'},channels:{fetch:async()=>channel}} as any,'guild',{site:'https://hearthroom.club',key:'a'.repeat(64),databasePath:':memory:',channels:[],roles:[],reviewChannel:'channel'},[]);
  try{assert.equal(await bot.reviewChannel(),channel);roles.set('ordinary',{id:'ordinary',permissions:{has:()=>false}});await assert.rejects(()=>bot.reviewChannel(),/review_channel_denied/);}finally{bot.store.close();}
 });
-test('review reminders explain the pending claim and how to release it',async()=>{
+test('review reminders name the claimed card in the reviewer language and link to it',async()=>{
  let content='';const bot=new CommunityBot({users:{fetch:async()=>({createDM:async()=>({send:async(p:any)=>{content=p.content;return {id:'message'};}})})}} as any,'guild',{site:'https://hearthroom.club',key:'a'.repeat(64),databasePath:':memory:',channels:[],roles:[]},[]);
- bot.call=async<T>()=>({kind:'review_reminder',path:'/review/s1',discord_id:'reviewer'} as T);
- try{await bot.notification('reminder');assert.match(content,/30 分鐘/);assert.match(content,/放回/);assert.ok(content.includes('https://hearthroom.club/review'));}finally{bot.store.close();}
+ bot.call=async<T>()=>({kind:'review_reminder',path:'/review/s1',discord_id:'reviewer',locale:'zh-Hant',text:'你認領的「雨夜書店」即將到期，請繼續審核或放回待審清單'} as T);
+ try{await bot.notification('reminder');assert.equal(content,'你認領的「雨夜書店」即將到期，請繼續審核或放回待審清單\n<https://hearthroom.club/review/s1>');}finally{bot.store.close();}
 });
 test('lost Discord send responses recover the existing notice from history',async()=>{
  let sent=0,edited=0,exists=false;

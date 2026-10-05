@@ -30,13 +30,3 @@ export function renderReviewNotice(job:ReviewJob,site:string,locale:ReviewLocale
  return {allowedMentions:{parse:[] as never[]},embeds:[{title,url,description:description.slice(0,3900),color:p?.status==='approved'?0x57a773:0x8c7860,footer:{text:c.updated},timestamp:new Date(job.updatedAt).toISOString()}],components:[{type:1 as const,components:[...(p?.status==='pending'?[{type:2 as const,style:5 as const,label:c.open,url}]:[]),{type:2 as const,style:5 as const,label:c.queue,url:site+'/review'}]}]};
 }
 
-export function renderReviewReminder(site:string,locale:ReviewLocale='zh-Hant') {
- const text={
-  'zh-Hant':'你認領的作品已超過 30 分鐘尚未完成審核。方便時請繼續審核；若暫時無法處理，可以放回待審清單，讓其他審核員接手。認領滿 45 分鐘時會到期。',
-  'zh-Hans':'你认领的作品已超过 30 分钟尚未完成审核。方便时请继续审核；若暂时无法处理，可以放回待审列表，让其他审核员接手。认领满 45 分钟时会到期。',
-  en:'Your claimed submission has been waiting for over 30 minutes. Please continue reviewing when you can, or release it so another reviewer can take over. Claims expire after 45 minutes.',
-  ja:'担当してから 30 分以上、審査が完了していません。お時間のあるときに審査を続けるか、担当を解除して別の審査担当者に引き継いでください。担当は 45 分で期限切れになります。',
-  ko:'담당한 작품의 검토가 30분 넘게 완료되지 않았습니다. 가능할 때 검토를 계속하거나 담당을 해제하여 다른 검토자에게 넘겨주세요. 담당 유효 시간은 45분입니다.',
- };
- return text[locale]+'\n<'+site+'/review>';
-}

@@ -241,3 +241,14 @@ test("a successful edit response is insufficient when the private title readback
     /private_title_readback/,
   );
 });
+test("the reporter's thread shows the case number but no delivery key or raw account number", async () => {
+  const f = fixture();
+  await f.transport.sendEvent(f.p, f.c, f.p.events[0]);
+  assert.match(f.sent.content, /回報帳號：<@reporter>/);
+  const reply = { seq: 2, kind: "reply", body: "已經修好了", deliveryKey: "secret-key" };
+  await f.transport.sendEvent(f.p, { ...f.c, events: [...f.p.events, reply] }, reply as any);
+  const description = f.sent.embeds[0].description;
+  assert.equal(description, "**HK-case · 社管回覆**\n已經修好了");
+  assert.ok(!JSON.stringify(f.sent.content ?? "").includes("secret-key"));
+  assert.equal(f.sent.embeds[0].footer.text, "hk-private:secret-key");
+});
