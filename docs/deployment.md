@@ -10,7 +10,7 @@
 `applications.commands` scopes。0.5.0 不要求 Administrator、Manage Roles、
 Moderate Members 或 Message Content／Presence／Server Members 特權 intents。
 指令回覆只對操作成員可見。唯一主動張貼的公開訊息是網站的每日更新摘要：只發到
-`COMMUNITY_UPDATES_CHANNELS` 指定的頻道，每個語言每天一則，當天修訂只編輯同一則，
+`COMMUNITY_UPDATES_CHANNELS` 指定的頻道，每個頻道每天一則，當天修訂只編輯同一則，
 不提及任何人（見下方「每日更新摘要」）。私訊只在成員於網站開啟後才會發送。
 
 安裝目的地必須由管理員確認。只在該 guild 註冊指令；即使 bot 被加進其他 guild，
@@ -172,8 +172,9 @@ MCP：不適用。此功能為私人 Discord 通知投影；審核仍走既有�
 ## 每日更新摘要與回報上線紀錄
 
 先部署 Hearthroom 的更新紀錄 migration 與 `update-*` bridge，再部署 Bot。在受限環境檔設定
-`COMMUNITY_UPDATES_CHANNELS="zh-Hant:<頻道 ID>,en:<頻道 ID>"`；語言限 zh-Hant、zh-Hans、en、
-ja、ko，每個語言一個頻道、每個頻道一個語言。頻道必須是同一伺服器裡 @everyone 看得到的文字或
+`COMMUNITY_UPDATES_CHANNELS="zh-Hans:<告示牌 ID>,zh-Hans:<大廳 ID>,en:<頻道 ID>"`；語言限 zh-Hant、
+zh-Hans、en、ja、ko。同一語言可以列多個頻道（例如告示牌加大廳），照列出的順序發；每個頻道只能出現一次、
+只服務一種語言。其中一個頻道權限不足時只跳過那一個，其他頻道照發。頻道必須是同一伺服器裡 @everyone 看得到的文字或
 公告頻道，Bot 需要檢視頻道、傳送訊息與嵌入連結權限；不得是社管論壇、私人對話父頻道或審核頻道。
 未設定時不發摘要。
 

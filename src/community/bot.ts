@@ -571,15 +571,15 @@ export class CommunityBot {
       reports: { entry: string; case: string }[];
     }>("update-pending", { locales });
     if (pending.version !== 1) throw new Error("update_version");
-    for (const d of pending.digests) {
-      const channel = channels[d.locale as keyof UpdateChannels];
-      if (!channel) continue;
-      try {
-        await this.updateDelivery(d.day, d.locale, channel);
-      } catch {
-        // counted as failed inside updateDelivery; the website retries on the next poll
-      }
-    }
+    for (const d of pending.digests)
+      // Each channel takes its own lease, post or edit, and ack. The website remembers only the last
+      // channel's message; every other channel edits through this bot's own receipt for it.
+      for (const channel of channels[d.locale as keyof UpdateChannels] ?? [])
+        try {
+          await this.updateDelivery(d.day, d.locale, channel);
+        } catch {
+          // counted as failed inside updateDelivery; a refused channel never blocks the next one
+        }
     if (this.cases)
       for (const r of pending.reports)
         try {
