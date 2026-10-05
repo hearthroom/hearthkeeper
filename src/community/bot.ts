@@ -1,4 +1,4 @@
-import { renderReviewNotice, renderReviewReminder, reviewNonce, type ReviewJob, type ReviewLocale } from './review-notice.js';
+import { renderReviewNotice, reviewNonce, type ReviewJob, type ReviewLocale } from './review-notice.js';
 import { renderCommunityNotice } from './notice.js';
 import { renderShippedNote, renderUpdateDigest, updateNonce, type UpdateChannels, type UpdateJob } from './update-notice.js';
 import {
@@ -302,7 +302,7 @@ export class CommunityBot {
         if(current.discord_id!==n.discord_id) {this.reviewMetrics.record('reminder','suppressed');return;}
       }
       const message = await dm.send({
-        content: n.kind === "review_reminder" ? renderReviewReminder(this.config.site,this.config.reviewLocale) : renderCommunityNotice(n.text, n.path, this.config.site, n.locale),
+        content: renderCommunityNotice(n.text, n.path, this.config.site, n.locale),
         allowedMentions: { parse: [] },
         nonce: createHash("sha256").update(id).digest("hex").slice(0, 24),
         enforceNonce: true,

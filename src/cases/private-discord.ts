@@ -11,7 +11,7 @@ import type {
   CaseEvent,
   PrivateProjection,
 } from "./store.js";
-import { CaseInteractions, forumContent, stateName } from "./interactions.js";
+import { CaseInteractions, threadContent, stateName } from "./interactions.js";
 import { caseStatus } from "./catalog.js";
 import type { PrivateTransport } from "./private-delivery.js";
 const memberAllow =
@@ -175,10 +175,10 @@ export class DiscordPrivateCases implements PrivateTransport {
       throw Error("private_identity_required");
     const t = await this.writable(p);
     const m = await t.send({
-      content: e.seq === 1 ? forumContent(c, e) : undefined,
+      content: e.seq === 1 ? threadContent(c, e) : undefined,
       embeds: [
         {
-          ...(e.seq === 1 ? {} : { description: forumContent(c, e) }),
+          ...(e.seq === 1 ? {} : { description: threadContent(c, e) }),
           footer: { text: "hk-private:" + e.deliveryKey },
         },
       ],
@@ -205,7 +205,7 @@ export class DiscordPrivateCases implements PrivateTransport {
       throw Error("private_starter_invalid");
     await starter.edit({
       content:
-        forumContent(c, first) +
+        threadContent(c, first) +
         "\n\n狀態：" +
         stateName(caseStatus(c)) +
         "\n你可以在這裡與社管交談、傳附件；正式補充與處理結果請使用案件選單。",

@@ -81,6 +81,27 @@ export function forumContent(c: CaseView, e: CaseView["events"][number]) {
   }
   return `**HK-${c.id.slice(0, 8)} · ${eventName(e.kind)}**\n${clean(e.body)}${e.seq === 1 && c.mode === "identified" ? `\n回報帳號：${c.reporter}` : ""}\n\n\`hk:${e.deliveryKey}\``;
 }
+/**
+ * The same event as the reporter's private thread shows it. The reporter reads this thread, so it
+ * carries no delivery key (the private thread finds its messages by the embed footer) and names
+ * the reporter as a mention instead of a raw account number. The case number stays: members see
+ * it in their own case viewer too.
+ */
+export function threadContent(c: CaseView, e: CaseView["events"][number]) {
+  if (e.seq === 1) {
+    const date = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Asia/Taipei",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(c.createdAt);
+    return `${date}（UTC+8）｜${e.body}${c.mode === "identified" && c.reporter ? `\n回報帳號：<@${c.reporter}>` : ""}`;
+  }
+  return `**HK-${c.id.slice(0, 8)} · ${eventName(e.kind)}**\n${clean(e.body)}`;
+}
 export class CaseInteractions {
   constructor(
     private store: CaseStore,
