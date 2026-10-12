@@ -6,7 +6,7 @@ import { PrivateDeliveryWorker } from "./cases/private-delivery.js";
 import { DeliveryWorker } from "./cases/delivery.js";
 import { Client, Events } from "discord.js";
 import { loadConfig } from "./config.js";
-import { createRuntime, gatewayIntents } from "./runtime.js";
+import { createRuntime, gatewayIntents, presenceActivity } from "./runtime.js";
 import { createHealthServer } from "./health.js";
 
 async function start() {
@@ -117,7 +117,8 @@ async function start() {
         Boolean(client.guilds.cache.get(config.guildId)?.available),
     );
 
-  client.on(Events.ClientReady, () => {
+  client.on(Events.ClientReady, (readyClient) => {
+    readyClient.user.setActivity(presenceActivity);
     updateReady();
     status("gateway_connected");
     void tick();

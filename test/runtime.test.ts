@@ -5,9 +5,11 @@ import { loadConfig } from "../src/config.js";
 import {
   createRuntime,
   commandDefinitions,
+  communityCommands,
   gatewayIntents,
+  presenceActivity,
 } from "../src/runtime.js";
-import { GatewayIntentBits, MessageFlags } from "discord.js";
+import { ActivityType, GatewayIntentBits, MessageFlags } from "discord.js";
 import { createHealthServer } from "../src/health.js";
 
 const env = {
@@ -41,6 +43,35 @@ test("commands use non-privileged Guilds and GuildMessages intents and include t
     ["hearthkeeper", "feedback", "myreports", "cases", "ping"],
   );
   assert.ok(commandDefinitions.every((x) => x.dm_permission === false));
+});
+
+test("commands include Chinese names and Simplified and Traditional descriptions", () => {
+  const hearthkeeper = commandDefinitions.find((x) => x.name === "hearthkeeper")!;
+  assert.deepEqual(hearthkeeper.name_localizations, {
+    "zh-TW": "蘇綺",
+    "zh-CN": "苏绮",
+  });
+  for (const command of [...commandDefinitions, ...communityCommands]) {
+    assert.ok(command.description_localizations["zh-TW"], command.name);
+    assert.ok(command.description_localizations["zh-CN"], command.name);
+    for (const option of
+      "options" in command && command.options ? command.options : []) {
+      assert.ok(option.description_localizations["zh-TW"], option.name);
+      assert.ok(option.description_localizations["zh-CN"], option.name);
+    }
+  }
+  const ping = commandDefinitions.find((x) => x.name === "ping")!;
+  assert.equal(ping.description, "Check whether Suki is responding");
+  assert.equal(ping.description_localizations["zh-TW"], "確認蘇綺是否在線");
+  assert.equal(ping.description_localizations["zh-CN"], "确认苏绮是否在线");
+});
+
+test("presence uses Suki's custom status line", () => {
+  assert.deepEqual(presenceActivity, {
+    name: "Custom Status",
+    type: ActivityType.Custom,
+    state: "陪你再 roll 一次",
+  });
 });
 
 function interaction(
@@ -96,6 +127,24 @@ test("unsupported locale falls back to English", async () => {
   assert.match((input.replies[0] as any).content, /not available yet/);
 });
 
+test("menu and ping use Simplified Chinese, Traditional Chinese and English by locale", async () => {
+  const runtime = createRuntime(loadConfig(env));
+  for (const [locale, heading, menuText, pingText] of [
+    ["zh-CN", "**苏绮**", "还没有开放", "我在这里！"],
+    ["zh-TW", "**蘇綺**", "尚未開放", "我在這裡！"],
+    ["en-US", "**Suki**", "not available yet", "I'm here!"],
+  ]) {
+    const menu = interaction(undefined, "hearthkeeper", locale);
+    await runtime.handle(menu);
+    assert.ok((menu.replies[0] as any).content.includes(heading));
+    assert.ok((menu.replies[0] as any).content.includes(menuText));
+
+    const ping = interaction(undefined, "ping", locale);
+    await runtime.handle(ping);
+    assert.equal((ping.replies[0] as any).content, pingText);
+  }
+});
+
 test("foreign guild, DM and mismatched application are rejected before responding", async () => {
   const runtime = createRuntime(loadConfig(env));
   for (const patch of [
@@ -149,7 +198,7 @@ test("readiness reflects live Discord connection, not only process existence", a
   assert.equal(runtime.health("/unknown").status, 404);
   const input = interaction(undefined, "ping");
   await runtime.handle(input);
-  assert.match((input.replies[0] as any).content, /爐邊管家/);
+  assert.equal((input.replies[0] as any).content, "我在這裡！");
   assert.match(await runtime.metrics(), /action="ping",outcome="success"/);
 });
 

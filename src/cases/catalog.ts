@@ -1,15 +1,21 @@
+import { localize, type UserLanguage } from "../locale.js";
+
 export const categories = [
-  { id: "bug", zh: "功能異常", en: "Bug report" },
-  { id: "billing", zh: "儲值問題", en: "Credit top-up" },
-  { id: "account", zh: "帳號問題", en: "Account help" },
-  { id: "card_error", zh: "角色卡錯誤", en: "Card error" },
-  { id: "review", zh: "審核疑問", en: "Review question" },
-  { id: "card_report", zh: "角色卡檢舉", en: "Report a card" },
+  { id: "bug", zh: "功能異常", zhHans: "功能异常", en: "Bug report" },
+  { id: "billing", zh: "儲值問題", zhHans: "充值问题", en: "Credit top-up" },
+  { id: "account", zh: "帳號問題", zhHans: "账号问题", en: "Account help" },
+  { id: "card_error", zh: "角色卡錯誤", zhHans: "角色卡错误", en: "Card error" },
+  { id: "review", zh: "審核疑問", zhHans: "审核疑问", en: "Review question" },
+  { id: "card_report", zh: "角色卡檢舉", zhHans: "角色卡举报", en: "Report a card" },
 ] as const;
 export const forumActions = ["archive", "lock", "archive_lock", "restore"];
-export function categoryName(id: string, zh = true) {
+export function categoryName(id: string, language: UserLanguage | boolean = true) {
+  const resolved =
+    typeof language === "boolean" ? (language ? "zh-Hant" : "en") : language;
   const c = categories.find((c) => c.id === id);
-  return c ? (zh ? c.zh : c.en) : zh ? "一般回報" : "General feedback";
+  return c
+    ? localize(resolved, c.zh, c.zhHans, c.en)
+    : localize(resolved, "一般回報", "一般反馈", "General feedback");
 }
 export function workflowKind(category: string) {
   return ["review", "card_report"].includes(category) ? "feedback" : "problem";

@@ -1,26 +1,40 @@
 import { Registry, Counter, Gauge, Histogram } from "@prometheus-io/client";
 import {
+  ActivityType,
   GatewayIntentBits,
   MessageFlags,
   type InteractionReplyOptions,
 } from "discord.js";
 import type { Config } from "./config.js";
+import { localize, userLanguage, type UserLanguage } from "./locale.js";
 
 export const gatewayIntents = [
   GatewayIntentBits.Guilds,
   GatewayIntentBits.GuildMessages,
 ];
+export const presenceActivity = {
+  name: "Custom Status",
+  type: ActivityType.Custom,
+  state: "陪你再 roll 一次",
+};
 export const communityCommands = [
   {
     name: "card",
     description: "Preview a public HearthRoom card",
-    description_localizations: { "zh-TW": "預覽 HearthRoom 公開角色卡" },
+    description_localizations: {
+      "zh-TW": "預覽 HearthRoom 公開角色卡",
+      "zh-CN": "预览 HearthRoom 公开角色卡",
+    },
     dm_permission: false,
     options: [
       {
         type: 3 as const,
         name: "number",
         description: "Public HearthRoom card number",
+        description_localizations: {
+          "zh-TW": "HearthRoom 公開角色卡編號",
+          "zh-CN": "HearthRoom 公开角色卡编号",
+        },
         required: true,
       },
     ],
@@ -28,31 +42,47 @@ export const communityCommands = [
   {
     name: "link",
     description: "Link your HearthRoom community account",
-    description_localizations: { "zh-TW": "連結 HearthRoom 社群帳號" },
+    description_localizations: {
+      "zh-TW": "連結 HearthRoom 社群帳號",
+      "zh-CN": "连接 HearthRoom 社群账号",
+    },
     dm_permission: false,
   },
   {
     name: "level",
     description: "View your community level and badges",
-    description_localizations: { "zh-TW": "查看社群等級與徽章" },
+    description_localizations: {
+      "zh-TW": "查看社群等級與徽章",
+      "zh-CN": "查看社群等级与徽章",
+    },
     dm_permission: false,
   },
   {
     name: "subscriptions",
     description: "Manage community notifications",
-    description_localizations: { "zh-TW": "管理社群通知" },
+    description_localizations: {
+      "zh-TW": "管理社群通知",
+      "zh-CN": "管理社群通知",
+    },
     dm_permission: false,
   },
   {
     name: "xp",
     description: "Pause or resume chat XP",
-    description_localizations: { "zh-TW": "停止或恢復發言計分" },
+    description_localizations: {
+      "zh-TW": "停止或恢復發言計分",
+      "zh-CN": "停止或恢复发言计分",
+    },
     dm_permission: false,
     options: [
       {
         type: 5 as const,
         name: "enabled",
         description: "Whether to count future chat XP",
+        description_localizations: {
+          "zh-TW": "是否計算之後的聊天經驗值",
+          "zh-CN": "是否计算之后的聊天经验值",
+        },
         required: true,
       },
     ],
@@ -61,32 +91,48 @@ export const communityCommands = [
 export const commandDefinitions = [
   {
     name: "hearthkeeper",
+    name_localizations: { "zh-TW": "蘇綺", "zh-CN": "苏绮" },
     description: "Open the HearthRoom community menu",
-    description_localizations: { "zh-TW": "開啟 HearthRoom 社群選單" },
+    description_localizations: {
+      "zh-TW": "開啟 HearthRoom 社群選單",
+      "zh-CN": "打开 HearthRoom 社群菜单",
+    },
     dm_permission: false,
   },
   {
     name: "feedback",
     description: "Submit a private or anonymous report",
-    description_localizations: { "zh-TW": "提出私密或匿名回報" },
+    description_localizations: {
+      "zh-TW": "提出私密或匿名回報",
+      "zh-CN": "提交私密或匿名反馈",
+    },
     dm_permission: false,
   },
   {
     name: "myreports",
     description: "View your reports and replies",
-    description_localizations: { "zh-TW": "查看我的回報與社管回覆" },
+    description_localizations: {
+      "zh-TW": "查看我的回報與社管回覆",
+      "zh-CN": "查看我的反馈与社管回复",
+    },
     dm_permission: false,
   },
   {
     name: "cases",
     description: "Manage reports (authorized moderators only)",
-    description_localizations: { "zh-TW": "處理回報案件（限授權社管）" },
+    description_localizations: {
+      "zh-TW": "處理回報案件（限授權社管）",
+      "zh-CN": "处理反馈案件（仅限授权社管）",
+    },
     dm_permission: false,
   },
   {
     name: "ping",
-    description: "Check whether Hearthkeeper is responding",
-    description_localizations: { "zh-TW": "確認爐邊管家是否正常回應" },
+    description: "Check whether Suki is responding",
+    description_localizations: {
+      "zh-TW": "確認蘇綺是否在線",
+      "zh-CN": "确认苏绮是否在线",
+    },
     dm_permission: false,
   },
 ];
@@ -111,13 +157,16 @@ export interface CommandInteraction {
   reply(payload: InteractionReplyOptions): Promise<unknown>;
 }
 
-function menu(zh: boolean, site: string): InteractionReplyOptions {
+function menu(language: UserLanguage, site: string): InteractionReplyOptions {
   return {
     flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },
-    content: zh
-      ? "**爐邊管家**\nHearthRoom 社群與寫卡指南在這裡。\n\n回報與案件追蹤尚未開放，請先聯絡社管。"
-      : "**Hearthkeeper**\nExplore HearthRoom and the character creation guide.\n\nReports and case tracking are not available yet. Please contact a moderator.",
+    content: localize(
+      language,
+      "**蘇綺**\n我把 HearthRoom 社群與寫卡指南放在這裡啦。\n\n回報與案件追蹤尚未開放，請先聯絡社管。",
+      "**苏绮**\n我把 HearthRoom 社群与写卡指南放在这里啦。\n\n反馈与案件追踪还没有开放，请先联系社管。",
+      "**Suki**\nI've put the HearthRoom community and character creation guide right here.\n\nReports and case tracking are not available yet. Please contact a moderator.",
+    ),
     components: [
       {
         type: 1,
@@ -125,19 +174,34 @@ function menu(zh: boolean, site: string): InteractionReplyOptions {
           {
             type: 2,
             style: 5,
-            label: zh ? "前往社群站" : "Visit HearthRoom",
+            label: localize(
+              language,
+              "前往社群站",
+              "前往社群站",
+              "Visit HearthRoom",
+            ),
             url: site,
           },
           {
             type: 2,
             style: 5,
-            label: zh ? "閱讀寫卡指南" : "Read the guide",
+            label: localize(
+              language,
+              "閱讀寫卡指南",
+              "阅读写卡指南",
+              "Read the guide",
+            ),
             url: site + "/guide",
           },
           {
             type: 2,
             style: 5,
-            label: zh ? "查看開源專案" : "View source",
+            label: localize(
+              language,
+              "查看開源專案",
+              "查看开源项目",
+              "View source",
+            ),
             url: "https://github.com/hearthroom/hearthkeeper",
           },
         ],
@@ -281,14 +345,17 @@ export function createRuntime(config: Config) {
       }
       const start = performance.now();
       try {
-        const zh = input.locale === "zh-TW";
+        const language = userLanguage(input.locale);
         await input.reply(
           action === "menu"
-            ? menu(zh, config.site)
+            ? menu(language, config.site)
             : {
-                content: zh
-                  ? "爐邊管家可以正常回應。"
-                  : "Hearthkeeper is responding.",
+                content: localize(
+                  language,
+                  "我在這裡！",
+                  "我在这里！",
+                  "I'm here!",
+                ),
                 flags: MessageFlags.Ephemeral,
                 allowedMentions: { parse: [] },
               },

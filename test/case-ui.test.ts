@@ -33,13 +33,14 @@ function interaction(
   kind = "command",
   customId = "",
   commandName = "hearthkeeper",
+  locale = "zh-TW",
 ) {
   const replies: any[] = [];
   return {
     guildId: "g",
     applicationId: "app",
     user: { id: "member" },
-    locale: "zh-TW",
+    locale,
     id: Math.random().toString(),
     commandName,
     customId,
@@ -69,6 +70,23 @@ function interaction(
     },
   };
 }
+test("report menu uses Simplified Chinese, Traditional Chinese and English by locale", async () => {
+  const f = setup();
+  try {
+    for (const [locale, heading, body] of [
+      ["zh-CN", "**苏绮**", "选择分类提交反馈吧"],
+      ["zh-TW", "**蘇綺**", "選擇分類提出回報吧"],
+      ["en-US", "**Suki**", "Choose a category and send your report"],
+    ]) {
+      const menu = interaction("command", "", "hearthkeeper", locale);
+      await f.ui.handle(menu);
+      assert.ok(menu.replies[0].content.includes(heading));
+      assert.ok(menu.replies[0].content.includes(body));
+    }
+  } finally {
+    f.done();
+  }
+});
 test("menu site buttons follow the configured site", async () => {
   const f = setup();
   try {
