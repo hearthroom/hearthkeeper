@@ -287,6 +287,7 @@ export function createRuntime(config: Config) {
   const relayFetch=new Counter({name:'hearthkeeper_relay_reference_fetch_total',help:'Reads of a replied-to message to tell whether it was the bot.',labelNames:['outcome'],registers:[registry]});
   const updateReport=new Counter({name:'hearthkeeper_update_report_total',help:'Shipped notes added to reports.',labelNames:['outcome'],registers:[registry]});
   reviewHealth.set(0);
+  relayPull.set(0);
   let ready = false;
   readyGauge.set(0);
   return {

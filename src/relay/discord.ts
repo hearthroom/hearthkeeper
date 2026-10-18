@@ -7,7 +7,7 @@ export interface RelayContext {
   staffRoleIds: string[];
   forumId?: string;
   privateCaseThread: (threadId: string) => boolean;
-  /** Whether a bot message is a daily digest or review summary the bot posted. */
+  /** Whether a bot message is one of its daily update digests. */
   digestMessage: (messageId: string) => boolean;
   recordFetch: (outcome: "success" | "failure") => void;
 }
@@ -32,8 +32,8 @@ async function repliedAuthor(m: Message, ctx: RelayContext) {
     replied.set(ref, { author: target.author.id, at: now });
     return target.author.id;
   } catch {
+    // Not cached: a passing failure must not hide later replies to the same message.
     ctx.recordFetch("failure");
-    replied.set(ref, { author: null, at: now });
     return null;
   }
 }

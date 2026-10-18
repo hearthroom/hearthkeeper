@@ -32,9 +32,11 @@ export function relayKind(f: RelayFacts, guild: string): RelayKind | null {
     f.forumThread
   )
     return null;
+  // Staff in a private report thread are the ones handling it.
+  if (f.privateCaseThread && f.authorStaff) return null;
   if (f.repliedAuthorId === f.botId) return "reply";
-  if (f.mentionsBot) return f.privateCaseThread && f.authorStaff ? null : "mention";
-  if (f.privateCaseThread && !f.authorStaff) return "case-thread";
+  if (f.mentionsBot) return "mention";
+  if (f.privateCaseThread) return "case-thread";
   return null;
 }
 
@@ -153,8 +155,9 @@ export class RelayStore {
     if (out.length) this.raise("handed", out.at(-1)!.seq);
     return out;
   }
+  /** A cursor from an older stream may be ahead of this one; it cannot acknowledge events it never saw. */
   ack(after: number) {
-    this.raise("acked", after);
+    this.raise("acked", Math.min(after, this.metaNumber("handed")));
   }
   gap(after: number) {
     return after < this.metaNumber("pruned");
@@ -173,6 +176,15 @@ export class RelayStore {
     if (last.seq !== null) this.raise("pruned", last.seq);
     this.db.prepare("DELETE FROM relay_events WHERE created_at<?").run(cut);
     this.db.prepare("DELETE FROM relay_gaps WHERE ended_at IS NOT NULL AND ended_at<?").run(cut);
+  }
+  heartbeat(now: number) {
+    this.db.prepare("INSERT OR REPLACE INTO relay_meta VALUES('heartbeat',?)").run(String(now));
+  }
+  /** Discord does not replay messages missed while the process was down: open a gap from the last sign of life. */
+  boot(now: number) {
+    const last = this.meta("heartbeat");
+    this.gatewayDown(last ? Number(last) : now);
+    this.heartbeat(now);
   }
   gatewayDown(now: number) {
     if (!this.db.prepare("SELECT 1 FROM relay_gaps WHERE ended_at IS NULL").get())
@@ -300,6 +312,8 @@ export function parseRelayQuery(url: string) {
 export function relayRoute(relay: Relay, onPull: () => void) {
   return async (url: string) => {
     if (!url.startsWith("/relay/")) return null;
+    if (new URL(url, "http://127.0.0.1").pathname !== "/relay/events")
+      return { status: 404, body: { status: "not_found" } };
     const q = parseRelayQuery(url);
     if (!q) return { status: 400, body: { status: "bad_request" } };
     const body = await relay.events(q.after, q.wait);

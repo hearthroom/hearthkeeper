@@ -208,7 +208,8 @@ Bot 只記中繼資料：種類（mention／reply／case-thread）、頻道名�
 
 讀取只走 loopback：`GET 127.0.0.1:<METRICS_PORT>/relay/events?after=<seq>&wait=<0-25>`。有新事件立刻回，
 沒有就最多等 `wait` 秒回空陣列。回應帶 `streamId`（資料表重建會變）、`latestSeq`、`gap`（游標早於
-保留期）、`gatewayReady` 與 Bot 和 Discord 的斷線區間。本機以 SSH 隧道連到這個埠，不開對外埠。
+保留期）、`gatewayReady` 與 Bot 和 Discord 的斷線區間。Bot 重啟期間的訊息 Discord 不會補送，所以啟動時從上次心跳
+（每分鐘寫一次）開一段斷線區間，連上後關閉，本機據此通知維運人員手動補看。本機以 SSH 隧道連到這個埠，不開對外埠。
 
 監控：`hearthkeeper_relay_events_total{kind,outcome}`（queued／coalesced／rate_limited）、
 `hearthkeeper_relay_pending_events`、`hearthkeeper_relay_oldest_pending_age_seconds`、

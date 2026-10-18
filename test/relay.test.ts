@@ -361,3 +361,47 @@ test("the Discord adapter reads only metadata and resolves replies with at most 
   assert.equal(await relayInput(msg({ author: { id: bot, bot: true }, mentions: mentioned }), ctx), null);
   assert.equal(await relayInput(msg(), ctx), null);
 });
+
+test("staff replying to the bot inside a private case thread is not relayed", () => {
+  assert.equal(
+    relayKind(facts({ type: 19, repliedAuthorId: bot, privateCaseThread: true, authorStaff: true }), guild),
+    null,
+  );
+  assert.equal(
+    relayKind(facts({ type: 19, repliedAuthorId: bot, privateCaseThread: true }), guild),
+    "reply",
+  );
+});
+
+test("a cursor from an older stream cannot mark the new stream's events as acknowledged", async () => {
+  const { relay, store, tick, at } = setup();
+  relay.observe(input());
+  tick(11_000);
+  await relay.events(500, 0);
+  assert.equal(store.stats(at()).pending, 1);
+});
+
+test("a restart opens a gateway gap from the last heartbeat; the first ready closes it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "relay-"));
+  try {
+    const path = join(dir, "relay.db");
+    const a = new RelayStore(new DatabaseSync(path));
+    a.heartbeat(1000);
+    a.heartbeat(61_000);
+    const b = new RelayStore(new DatabaseSync(path));
+    b.boot(90_000);
+    assert.deepEqual(b.gatewayGaps(), [{ from: 61_000, to: null }]);
+    b.gatewayUp(95_000);
+    assert.deepEqual(b.gatewayGaps(), [{ from: 61_000, to: 95_000 }]);
+    const fresh = new RelayStore(new DatabaseSync(join(dir, "fresh.db")));
+    fresh.boot(5000);
+    assert.deepEqual(fresh.gatewayGaps(), [{ from: 5000, to: null }]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unknown relay paths are not found", async () => {
+  const { relay } = setup();
+  assert.equal((await relayRoute(relay, () => {})("/relay/other"))!.status, 404);
+});

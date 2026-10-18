@@ -83,7 +83,7 @@ async function start() {
   const relay = relayStore
     ? new Relay(relayStore, {
         now: Date.now,
-        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms).unref()),
         gatewayReady,
       })
     : undefined;
@@ -93,7 +93,9 @@ async function start() {
     if (pulled) runtime.relayMetrics.pulled(s.pending, s.oldestAgeMs);
     else runtime.relayMetrics.health(s.pending, s.oldestAgeMs);
   };
+  relayStore?.boot(Date.now());
   const relayTimer = setInterval(() => {
+    relayStore?.heartbeat(Date.now());
     relayStore?.prune(Date.now());
     relayHealth(false);
   }, 60000);
@@ -226,6 +228,7 @@ async function start() {
     if (stopping) return;
     stopping = true;
     runtime.setReady(false);
+    relayStore?.gatewayDown(Date.now());
     clearInterval(timer);
     clearInterval(communityTimer);
     clearInterval(relayTimer);
