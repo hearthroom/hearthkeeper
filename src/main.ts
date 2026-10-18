@@ -4,7 +4,7 @@ import { DiscordCases } from "./cases/discord.js";
 import { DiscordPrivateCases } from "./cases/private-discord.js";
 import { PrivateDeliveryWorker } from "./cases/private-delivery.js";
 import { DeliveryWorker } from "./cases/delivery.js";
-import { Client, Events, PermissionFlagsBits, type Message } from "discord.js";
+import { Client, Events, PermissionFlagsBits, Status, type Message } from "discord.js";
 import { loadConfig } from "./config.js";
 import {
   createRuntime,
@@ -83,8 +83,10 @@ async function start() {
     community && config.community?.relay
       ? new RelayStore(community.store.db)
       : undefined;
+  // The client stays "ready" while a shard reconnects; the shard status does not.
   const gatewayReady = () =>
     client.isReady() &&
+    client.ws.shards.every((s) => s.status === Status.Ready) &&
     Boolean(client.guilds.cache.get(config.guildId)?.available);
   const relay = relayStore
     ? new Relay(relayStore, {
@@ -210,7 +212,7 @@ async function start() {
   const updateReady = () => {
     const ready = gatewayReady();
     runtime.setReady(ready);
-    if (ready) void recovery?.up();
+    if (ready) void recovery?.up().catch(() => status("relay_backfill_failed"));
     else recovery?.down();
   };
 

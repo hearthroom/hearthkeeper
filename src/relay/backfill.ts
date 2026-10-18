@@ -88,6 +88,9 @@ interface GapStore {
  */
 export class GapRecovery {
   private generation = 0;
+  // discord.js keeps reporting ready while a shard reconnects, so track it here: cleared on every
+  // disconnect, set again only by a readiness event.
+  private connected = false;
   private running: Promise<void> | null = null;
   private again = false;
   constructor(
@@ -100,10 +103,12 @@ export class GapRecovery {
     },
   ) {}
   down() {
+    this.connected = false;
     this.generation++;
     this.o.store.gatewayDown(this.o.now());
   }
   async up() {
+    this.connected = true;
     if (this.running) {
       this.again = true;
       return this.running;
@@ -118,22 +123,30 @@ export class GapRecovery {
   private async loop() {
     do {
       this.again = false;
-      const gap = this.o.store.openGap();
-      if (!gap) return;
-      const generation = this.generation;
-      let outcome: "complete" | "partial" | "failed";
       try {
-        outcome = (await this.o.read(gap.from)).complete ? "complete" : "partial";
+        const gap = this.o.store.openGap();
+        if (!gap) return;
+        const generation = this.generation;
+        let outcome: "complete" | "partial" | "failed";
+        try {
+          outcome = (await this.o.read(gap.from)).complete ? "complete" : "partial";
+        } catch {
+          outcome = "failed";
+        }
+        // Still disconnected: leave the gap open for the next readiness event.
+        if (!this.connected || !this.o.ready()) return;
+        // Dropped and came back during the read: read the same gap again.
+        if (generation !== this.generation) {
+          this.again = true;
+          continue;
+        }
+        this.o.store.gatewayUp(this.o.now(), outcome === "complete");
+        this.o.record(outcome);
       } catch {
-        outcome = "failed";
+        // A storage error must not take the bot down; the gap stays as it was.
+        this.o.record("failed");
+        return;
       }
-      if (!this.o.ready()) return;
-      if (generation !== this.generation) {
-        this.again = true;
-        continue;
-      }
-      this.o.store.gatewayUp(this.o.now(), outcome === "complete");
-      this.o.record(outcome);
     } while (this.again);
   }
 }

@@ -217,3 +217,37 @@ test("gaps longer than threads stay active are not claimed complete", async () =
   const short = await backfill({ ...g.deps, handle: async () => {} }, now - 600_000, now);
   assert.equal(short.complete, true);
 });
+
+test("a disconnect during the read-back keeps the gap open even if the client still claims to be ready", async () => {
+  const s = recoverySetup();
+  s.rec.down();
+  s.onRead(async () => {
+    s.rec.down();
+    return { complete: true };
+  });
+  await s.rec.up();
+  assert.deepEqual(s.store.openGap(), { from: 10_000 }, "no ready event since the drop");
+  assert.equal(s.runs.length, 1);
+  s.onRead(async () => ({ complete: true }));
+  await s.rec.up();
+  assert.equal(s.store.openGap(), null);
+});
+
+test("a storage error during recovery is reported, not thrown", async () => {
+  const outcomes: string[] = [];
+  const rec = new GapRecovery({
+    store: {
+      openGap: () => ({ from: 1 }),
+      gatewayDown: () => {},
+      gatewayUp: () => {
+        throw new Error("database is locked");
+      },
+    },
+    now: () => 2,
+    ready: () => true,
+    read: async () => ({ complete: true }),
+    record: (o) => outcomes.push(o),
+  });
+  await assert.doesNotReject(rec.up());
+  assert.deepEqual(outcomes, ["failed"]);
+});
