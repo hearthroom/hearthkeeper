@@ -208,12 +208,18 @@ Bot 只記中繼資料：種類（mention／reply／case-thread）、頻道名�
 
 讀取只走 loopback：`GET 127.0.0.1:<METRICS_PORT>/relay/events?after=<seq>&wait=<0-25>`。有新事件立刻回，
 沒有就最多等 `wait` 秒回空陣列。回應帶 `streamId`（資料表重建會變）、`latestSeq`、`gap`（游標早於
-保留期）、`gatewayReady` 與 Bot 和 Discord 的斷線區間。Bot 重啟期間的訊息 Discord 不會補送，所以啟動時從上次心跳
-（每分鐘寫一次）開一段斷線區間，連上後關閉，本機據此通知維運人員手動補看。本機以 SSH 隧道連到這個埠，不開對外埠。
+保留期）、`gatewayReady` 與 Bot 和 Discord 的斷線區間（含 `recovered`）。
+
+回補：Bot 重啟或 gateway 重連期間的訊息 Discord 不會補送。啟動時從上次心跳（每分鐘寫一次）開一段斷線區間；
+gateway 就緒後以 REST 讀回這段時間（往前多讀 1 分鐘），走同一套判斷，已轉過的訊息以連結去重（保留 7 天）。
+只讀斷線後有新訊息的頻道與進行中的討論串，社管論壇除外；上限 50 個頻道、每頻道 5 頁（500 則）、最長回溯 24 小時，
+每次讀取間隔 1 秒。全部讀完才把區間標成 `recovered`；超過上限、某頻道讀不到或回補中途又斷線，區間標成未回補或保持開啟，
+本機據此請維運人員手動補看。Bot 需要各頻道的「讀取訊息歷史」權限，缺了該頻道就算未回補。本機以 SSH 隧道連到這個埠，不開對外埠。
 
 監控：`hearthkeeper_relay_events_total{kind,outcome}`（queued／coalesced／rate_limited）、
 `hearthkeeper_relay_pending_events`、`hearthkeeper_relay_oldest_pending_age_seconds`、
-`hearthkeeper_relay_last_pull_timestamp_seconds`、`hearthkeeper_relay_reference_fetch_total{outcome}`。
+`hearthkeeper_relay_last_pull_timestamp_seconds`、`hearthkeeper_relay_reference_fetch_total{outcome}`、
+`hearthkeeper_relay_backfill_total{outcome}`（complete／partial／failed）；`events_total` 的 `outcome` 另有 duplicate（回補讀到已轉過的訊息）。
 本機接收端在線時 `time()-hearthkeeper_relay_last_pull_timestamp_seconds` 應小於 30（未啟用 relay 時此值恆為 0，不要套這條檢查）。
 本機游標只從回傳的事件推進；`streamId` 改變時從 0 重拉，不要直接跳到 `latestSeq`，否則跳過的事件會一直算在待送裡。
 

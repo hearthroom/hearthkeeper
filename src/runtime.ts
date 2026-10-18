@@ -284,6 +284,7 @@ export function createRuntime(config: Config) {
   const relayPending=new Gauge({name:'hearthkeeper_relay_pending_events',help:'Relay events not yet acknowledged by the operators machine.',registers:[registry]});
   const relayOldest=new Gauge({name:'hearthkeeper_relay_oldest_pending_age_seconds',help:'Age of the oldest unacknowledged relay event.',registers:[registry]});
   const relayPull=new Gauge({name:'hearthkeeper_relay_last_pull_timestamp_seconds',help:'Last time the operators machine read relay events.',registers:[registry]});
+  const relayBackfill=new Counter({name:'hearthkeeper_relay_backfill_total',help:'Read-backs of messages sent while the gateway was down.',labelNames:['outcome'],registers:[registry]});
   const relayFetch=new Counter({name:'hearthkeeper_relay_reference_fetch_total',help:'Reads of a replied-to message to tell whether it was the bot.',labelNames:['outcome'],registers:[registry]});
   const updateReport=new Counter({name:'hearthkeeper_update_report_total',help:'Shipped notes added to reports.',labelNames:['outcome'],registers:[registry]});
   reviewHealth.set(0);
@@ -299,7 +300,8 @@ export function createRuntime(config: Config) {
       health(count:number,oldest:number|null){reviewPending.set(count);reviewOldest.set(oldest===null?0:Math.max(0,(Date.now()-oldest)/1000));reviewHealth.set(Date.now()/1000);},
     },
     relayMetrics:{
-      event(kind:string,outcome:string){relayEvents.inc({kind:['mention','reply','case-thread'].includes(kind)?kind:'mention',outcome:['queued','coalesced','rate_limited'].includes(outcome)?outcome:'queued'});},
+      event(kind:string,outcome:string){relayEvents.inc({kind:['mention','reply','case-thread'].includes(kind)?kind:'mention',outcome:['queued','coalesced','rate_limited','duplicate'].includes(outcome)?outcome:'queued'});},
+      backfill(outcome:'complete'|'partial'|'failed'){relayBackfill.inc({outcome});},
       fetch(outcome:'success'|'failure'){relayFetch.inc({outcome});},
       pulled(pending:number,oldestAgeMs:number){relayPending.set(pending);relayOldest.set(oldestAgeMs/1000);relayPull.set(Date.now()/1000);},
       health(pending:number,oldestAgeMs:number){relayPending.set(pending);relayOldest.set(oldestAgeMs/1000);},

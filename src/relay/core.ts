@@ -98,7 +98,11 @@ export class RelayStore {
   constructor(private db: DatabaseSync) {
     db.exec(`CREATE TABLE IF NOT EXISTS relay_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,channel_id TEXT NOT NULL,channel_name TEXT NOT NULL,first_message TEXT NOT NULL,last_message TEXT NOT NULL,count INTEGER NOT NULL,suppressed INTEGER NOT NULL,reply_to TEXT,reply_to_digest INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS relay_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS relay_gaps(started_at INTEGER PRIMARY KEY,ended_at INTEGER);`);
+ CREATE TABLE IF NOT EXISTS relay_gaps(started_at INTEGER PRIMARY KEY,ended_at INTEGER);
+ CREATE TABLE IF NOT EXISTS relay_seen(link TEXT PRIMARY KEY,at INTEGER NOT NULL);`);
+    // Added after the first release: older databases lack the column.
+    if (!(db.prepare("SELECT 1 FROM pragma_table_info('relay_gaps') WHERE name='recovered'").get()))
+      db.exec("ALTER TABLE relay_gaps ADD COLUMN recovered INTEGER NOT NULL DEFAULT 0");
     db.prepare("INSERT OR IGNORE INTO relay_meta VALUES('stream',?)").run(randomUUID());
   }
   private meta(key: string) {
@@ -126,6 +130,10 @@ export class RelayStore {
           | undefined
       )?.seq ?? 0,
     );
+  }
+  /** Records a message as relayed; false when the gateway or a backfill already did. */
+  firstSight(link: string, now: number) {
+    return this.db.prepare("INSERT OR IGNORE INTO relay_seen VALUES(?,?)").run(link, now).changes === 1;
   }
   create(e: Omit<RelayInput, "authorId">, suppressed: number, now: number) {
     const r = this.db
@@ -179,6 +187,7 @@ export class RelayStore {
     if (last.seq !== null) this.raise("pruned", last.seq);
     this.db.prepare("DELETE FROM relay_events WHERE created_at<?").run(cut);
     this.db.prepare("DELETE FROM relay_gaps WHERE ended_at IS NOT NULL AND ended_at<?").run(cut);
+    this.db.prepare("DELETE FROM relay_seen WHERE at<?").run(cut);
   }
   heartbeat(now: number) {
     this.db.prepare("INSERT OR REPLACE INTO relay_meta VALUES('heartbeat',?)").run(String(now));
@@ -191,18 +200,28 @@ export class RelayStore {
   }
   gatewayDown(now: number) {
     if (!this.db.prepare("SELECT 1 FROM relay_gaps WHERE ended_at IS NULL").get())
-      this.db.prepare("INSERT OR IGNORE INTO relay_gaps VALUES(?,NULL)").run(now);
+      this.db.prepare("INSERT OR IGNORE INTO relay_gaps(started_at,ended_at) VALUES(?,NULL)").run(now);
   }
-  gatewayUp(now: number) {
-    this.db.prepare("UPDATE relay_gaps SET ended_at=? WHERE ended_at IS NULL").run(now);
+  /** `recovered`: the messages sent during the gap were read back completely. */
+  gatewayUp(now: number, recovered = false) {
+    this.db
+      .prepare("UPDATE relay_gaps SET ended_at=?,recovered=? WHERE ended_at IS NULL")
+      .run(now, recovered ? 1 : 0);
+  }
+  openGap() {
+    const g = this.db.prepare("SELECT started_at FROM relay_gaps WHERE ended_at IS NULL").get() as
+      | { started_at: number }
+      | undefined;
+    return g ? { from: g.started_at } : null;
   }
   gatewayGaps() {
     return (
-      this.db.prepare("SELECT started_at,ended_at FROM relay_gaps ORDER BY started_at").all() as {
+      this.db.prepare("SELECT started_at,ended_at,recovered FROM relay_gaps ORDER BY started_at").all() as {
         started_at: number;
         ended_at: number | null;
+        recovered: number;
       }[]
-    ).map((g) => ({ from: g.started_at, to: g.ended_at }));
+    ).map((g) => ({ from: g.started_at, to: g.ended_at, recovered: g.recovered === 1 }));
   }
 }
 
@@ -243,8 +262,9 @@ export class Relay {
   get streamId() {
     return this.store.streamId();
   }
-  observe(e: RelayInput): "queued" | "coalesced" | "rate_limited" {
+  observe(e: RelayInput): "queued" | "coalesced" | "rate_limited" | "duplicate" {
     const now = this.o.now();
+    if (!this.store.firstSight(e.messageLink, now)) return "duplicate";
     this.forget(now);
     const key = e.authorId + ":" + e.channelId;
     const group = this.groups.get(key);

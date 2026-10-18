@@ -4,12 +4,13 @@ import { DiscordCases } from "./cases/discord.js";
 import { DiscordPrivateCases } from "./cases/private-discord.js";
 import { PrivateDeliveryWorker } from "./cases/private-delivery.js";
 import { DeliveryWorker } from "./cases/delivery.js";
-import { Client, Events } from "discord.js";
+import { Client, Events, type Message } from "discord.js";
 import { loadConfig } from "./config.js";
 import { createRuntime, gatewayIntents, presenceActivity } from "./runtime.js";
 import { createHealthServer } from "./health.js";
 import { Relay, RelayStore, relayRoute } from "./relay/core.js";
 import { relayInput } from "./relay/discord.js";
+import { backfill } from "./relay/backfill.js";
 
 async function start() {
   const config = loadConfig(process.env);
@@ -140,10 +141,68 @@ async function start() {
   const timer = setInterval(() => void tick(), 15000);
   timer.unref();
   const status = (event: string) => console.log(JSON.stringify({ event }));
+  const relayMessage = (message: Message) =>
+    relay && community
+      ? relayInput(message, {
+          guildId: config.guildId,
+          botId: client.user?.id ?? config.applicationId,
+          staffRoleIds: config.cases?.staffRoleIds ?? [],
+          forumId: config.cases?.forumId,
+          privateCaseThread: (id) => !!store?.privateCaseForThread(id),
+          digestMessage: (id) => community.store.isUpdateDigest(id),
+          recordFetch: runtime.relayMetrics.fetch,
+        }).then((input) => {
+          if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
+        })
+      : Promise.resolve();
+  let recovering = false;
+  // Discord does not replay what a new gateway session missed: read the gap back over REST.
+  const recover = async () => {
+    const gap = relayStore?.openGap();
+    if (!relayStore || !gap || recovering) return;
+    recovering = true;
+    try {
+      const guild = await client.guilds.fetch(config.guildId);
+      const r = await backfill<Message>(
+        {
+          listChannels: async () => {
+            const channels = [...(await guild.channels.fetch()).values()];
+            const threads = [...(await guild.channels.fetchActiveThreads()).threads.values()];
+            return [...channels, ...threads].flatMap((c) =>
+              c &&
+              c.isTextBased() &&
+              !(c.isThread() && c.parentId === config.cases?.forumId)
+                ? [{ id: c.id, lastMessageId: c.lastMessageId ?? null }]
+                : [],
+            );
+          },
+          fetchAfter: async (id, after) => {
+            const c = await client.channels.fetch(id);
+            if (!c?.isTextBased()) return [];
+            const page = await c.messages.fetch({ after, limit: 100 });
+            return [...page.values()].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+          },
+          handle: relayMessage,
+          sleep: (ms) => new Promise((r) => setTimeout(r, ms).unref()),
+        },
+        gap.from,
+        Date.now(),
+      );
+      runtime.relayMetrics.backfill(r.complete ? "complete" : "partial");
+      // A disconnect during the read keeps the gap open; the next ready reads it again.
+      if (gatewayReady()) relayStore.gatewayUp(Date.now(), r.complete);
+      status(r.complete ? "relay_backfill_complete" : "relay_backfill_partial");
+    } catch {
+      runtime.relayMetrics.backfill("failed");
+      status("relay_backfill_failed");
+    } finally {
+      recovering = false;
+    }
+  };
   const updateReady = () => {
     const ready = gatewayReady();
     runtime.setReady(ready);
-    if (ready) relayStore?.gatewayUp(Date.now());
+    if (ready) void recover();
     else relayStore?.gatewayDown(Date.now());
   };
 
@@ -191,20 +250,7 @@ async function start() {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    if (relay && community)
-      void relayInput(message, {
-        guildId: config.guildId,
-        botId: client.user?.id ?? config.applicationId,
-        staffRoleIds: config.cases?.staffRoleIds ?? [],
-        forumId: config.cases?.forumId,
-        privateCaseThread: (id) => !!store?.privateCaseForThread(id),
-        digestMessage: (id) => community.store.isUpdateDigest(id),
-        recordFetch: runtime.relayMetrics.fetch,
-      })
-        .then((input) => {
-          if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
-        })
-        .catch(() => status("relay_failed"));
+    void relayMessage(message).catch(() => status("relay_failed"));
     try {
       community?.onMessage(message);
       if (cases && (await cases.onStaffMessage(message))) void tick();

@@ -52,8 +52,12 @@ export async function relayInput(m: Message, ctx: RelayContext): Promise<RelayIn
   const mentionsBot =
     m.mentions.users.has(ctx.botId) || (!!botRole && m.mentions.roles.has(botRole));
   const repliedAuthorId = await repliedAuthor(m, ctx);
-  const authorStaff =
-    privateCaseThread && !!m.member && ctx.staffRoleIds.some((id) => m.member!.roles.cache.has(id));
+  // Messages read back over REST may arrive without the member attached.
+  const member =
+    privateCaseThread
+      ? (m.member ?? (await m.guild?.members.fetch(m.author.id).catch(() => null)) ?? null)
+      : null;
+  const authorStaff = !!member && ctx.staffRoleIds.some((id) => member.roles.cache.has(id));
   const kind = relayKind(
     {
       guildId: m.guildId,

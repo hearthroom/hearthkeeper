@@ -76,18 +76,20 @@ function setup(options: Partial<ConstructorParameters<typeof Relay>[1]> = {}) {
   });
   return { store, relay, tick: (ms: number) => (now += ms), at: () => now };
 }
+let nextMessage = 1000;
+// Each call is a distinct Discord message unless a test pins the link.
 const input = (over: Record<string, unknown> = {}) => ({
   kind: "mention" as const,
   authorId: "200000000000000001",
   channelId: "700000000000000001",
   channelName: "酒馆大厅",
-  messageLink: "https://discord.com/channels/g/c/1",
+  messageLink: `https://discord.com/channels/g/c/${nextMessage++}`,
   ...over,
 });
 
 test("a burst from one person becomes one event once it settles, carrying no author identity", async () => {
   const { relay, tick } = setup();
-  assert.equal(relay.observe(input()), "queued");
+  assert.equal(relay.observe(input({ messageLink: "https://discord.com/channels/g/c/1" })), "queued");
   tick(3000);
   assert.equal(relay.observe(input({ messageLink: "https://discord.com/channels/g/c/2" })), "coalesced");
   assert.equal((await relay.events(0, 0)).events.length, 0, "still settling");
@@ -228,7 +230,7 @@ test("gateway outages are recorded and reported with readiness", async () => {
   tick(1);
   const r = await relay.events(0, 0);
   assert.equal(r.gatewayReady, false);
-  assert.deepEqual(r.gatewayGaps, [{ from: 5000, to: 9000 }]);
+  assert.deepEqual(r.gatewayGaps, [{ from: 5000, to: 9000, recovered: false }]);
 });
 
 test("query parsing accepts only a cursor and a bounded wait", () => {
@@ -354,6 +356,14 @@ test("the Discord adapter reads only metadata and resolves replies with at most 
   assert.equal(c?.channelName, "回报 / hk-pending-x");
   const staff = { roles: { cache: new Map([["900000000000000001", {}]]) } };
   assert.equal(await relayInput(msg({ channel: thread({}), member: staff, mentions: mentioned }), ctx), null);
+  const restGuild = {
+    members: { me: null, fetch: async () => staff },
+  };
+  assert.equal(
+    await relayInput(msg({ channel: thread({}), member: null, guild: restGuild }), ctx),
+    null,
+    "a staff member read back without member data is still recognised",
+  );
   assert.equal(
     await relayInput(msg({ channel: thread({ type: ChannelType.PublicThread, parentId: ctx.forumId }), mentions: mentioned }), ctx),
     null,
@@ -390,12 +400,12 @@ test("a restart opens a gateway gap from the last heartbeat; the first ready clo
     a.heartbeat(61_000);
     const b = new RelayStore(new DatabaseSync(path));
     b.boot(90_000);
-    assert.deepEqual(b.gatewayGaps(), [{ from: 61_000, to: null }]);
+    assert.deepEqual(b.gatewayGaps(), [{ from: 61_000, to: null, recovered: false }]);
     b.gatewayUp(95_000);
-    assert.deepEqual(b.gatewayGaps(), [{ from: 61_000, to: 95_000 }]);
+    assert.deepEqual(b.gatewayGaps(), [{ from: 61_000, to: 95_000, recovered: false }]);
     const fresh = new RelayStore(new DatabaseSync(join(dir, "fresh.db")));
     fresh.boot(5000);
-    assert.deepEqual(fresh.gatewayGaps(), [{ from: 5000, to: null }]);
+    assert.deepEqual(fresh.gatewayGaps(), [{ from: 5000, to: null, recovered: false }]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
