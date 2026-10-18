@@ -66,7 +66,7 @@ function fakeGuild(channels: Record<string, { last: string | null; messages?: st
 test("backfill reads only channels active since the gap, oldest first, through every page", async () => {
   const now = Date.parse("2026-10-18T13:00:00Z");
   const from = now - 600_000;
-  const cut = BigInt(snowflakeAt(from - 60_000));
+  const cut = BigInt(snowflakeAt(from - 180_000));
   const after = (ms: number) => String(cut + BigInt(ms) * 4_194_304n);
   const busy = Array.from({ length: 150 }, (_, i) => after(i + 1));
   const { deps, calls } = fakeGuild({
@@ -87,7 +87,7 @@ test("backfill reads only channels active since the gap, oldest first, through e
 test("backfill is bounded and reports incomplete when it had to stop or skip", async () => {
   const now = Date.parse("2026-10-18T13:00:00Z");
   const from = now - 600_000;
-  const cut = BigInt(snowflakeAt(from - 60_000));
+  const cut = BigInt(snowflakeAt(from - 180_000));
   const ids = (n: number) => Array.from({ length: n }, (_, i) => String(cut + BigInt(i + 1) * 4_194_304n));
   const huge = ids(700);
   const big = fakeGuild({ a: { last: huge.at(-1)!, messages: huge } });
@@ -113,4 +113,107 @@ test("backfill is bounded and reports incomplete when it had to stop or skip", a
   const r4 = await backfill({ ...old.deps, handle: async () => {} }, now - 3 * 86_400_000, now);
   assert.equal(r4.complete, false, "gaps longer than a day are only partly recovered");
   assert.ok(old.calls[0]!.endsWith(`>${snowflakeAt(now - 86_400_000)}`));
+});
+
+import { GapRecovery } from "../src/relay/backfill.js";
+import { gatewayReadinessEvents } from "../src/runtime.js";
+import { Events } from "discord.js";
+
+function recoverySetup() {
+  const store = new RelayStore(new DatabaseSync(":memory:"));
+  let ready = true;
+  let now = 10_000;
+  const runs: number[] = [];
+  const outcomes: string[] = [];
+  let next: () => Promise<{ complete: boolean }> = async () => ({ complete: true });
+  const rec = new GapRecovery({
+    store,
+    now: () => now,
+    ready: () => ready,
+    read: async (from) => {
+      runs.push(from);
+      return next();
+    },
+    record: (o) => outcomes.push(o),
+  });
+  return {
+    store, rec, runs, outcomes,
+    setReady: (v: boolean) => (ready = v),
+    tick: (ms: number) => (now += ms),
+    onRead: (f: () => Promise<{ complete: boolean }>) => (next = f),
+  };
+}
+
+test("a ready gateway reads the open gap back once and marks it recovered", async () => {
+  const s = recoverySetup();
+  s.rec.down();
+  s.tick(5000);
+  await s.rec.up();
+  assert.deepEqual(s.runs, [10_000]);
+  assert.equal(s.store.openGap(), null);
+  assert.equal(s.store.gatewayGaps()[0]!.recovered, true);
+  await s.rec.up();
+  assert.equal(s.runs.length, 1, "nothing left to read");
+});
+
+test("a disconnect during the read-back reads again instead of claiming recovery", async () => {
+  const s = recoverySetup();
+  s.rec.down();
+  let first = true;
+  s.onRead(async () => {
+    if (first) {
+      first = false;
+      s.rec.down();
+      s.tick(1000);
+      void s.rec.up();
+    }
+    return { complete: true };
+  });
+  await s.rec.up();
+  assert.equal(s.runs.length, 2);
+  assert.equal(s.store.gatewayGaps().length, 1);
+  assert.equal(s.store.gatewayGaps()[0]!.recovered, true);
+});
+
+test("a read-back still running when the gateway drops leaves the gap open", async () => {
+  const s = recoverySetup();
+  s.rec.down();
+  s.onRead(async () => {
+    s.setReady(false);
+    s.rec.down();
+    return { complete: true };
+  });
+  await s.rec.up();
+  assert.deepEqual(s.store.openGap(), { from: 10_000 });
+});
+
+test("a failed or partial read-back closes the gap as not recovered so the operators are told", async () => {
+  const s = recoverySetup();
+  s.rec.down();
+  s.onRead(async () => {
+    throw new Error("503");
+  });
+  await s.rec.up();
+  assert.equal(s.store.openGap(), null);
+  assert.equal(s.store.gatewayGaps()[0]!.recovered, false);
+  s.tick(1000);
+  s.rec.down();
+  s.onRead(async () => ({ complete: false }));
+  await s.rec.up();
+  assert.equal(s.store.gatewayGaps()[1]!.recovered, false);
+  assert.deepEqual(s.outcomes, ["failed", "partial"]);
+});
+
+test("a new gateway session and a returning guild both count as becoming ready", () => {
+  for (const e of [Events.ShardReady, Events.ShardResume, Events.GuildAvailable, Events.GuildCreate])
+    assert.ok((gatewayReadinessEvents as readonly Events[]).includes(e), e);
+});
+
+test("gaps longer than threads stay active are not claimed complete", async () => {
+  const now = Date.parse("2026-10-18T13:00:00Z");
+  const g = fakeGuild({});
+  const r = await backfill({ ...g.deps, handle: async () => {} }, now - 2 * 3_600_000, now);
+  assert.equal(r.complete, false);
+  const short = await backfill({ ...g.deps, handle: async () => {} }, now - 600_000, now);
+  assert.equal(short.complete, true);
 });

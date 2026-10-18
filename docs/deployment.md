@@ -211,10 +211,11 @@ Bot 只記中繼資料：種類（mention／reply／case-thread）、頻道名�
 保留期）、`gatewayReady` 與 Bot 和 Discord 的斷線區間（含 `recovered`）。
 
 回補：Bot 重啟或 gateway 重連期間的訊息 Discord 不會補送。啟動時從上次心跳（每分鐘寫一次）開一段斷線區間；
-gateway 就緒後以 REST 讀回這段時間（往前多讀 1 分鐘），走同一套判斷，已轉過的訊息以連結去重（保留 7 天）。
-只讀斷線後有新訊息的頻道與進行中的討論串，社管論壇除外；上限 50 個頻道、每頻道 5 頁（500 則）、最長回溯 24 小時，
-每次讀取間隔 1 秒。全部讀完才把區間標成 `recovered`；超過上限、某頻道讀不到或回補中途又斷線，區間標成未回補或保持開啟，
-本機據此請維運人員手動補看。Bot 需要各頻道的「讀取訊息歷史」權限，缺了該頻道就算未回補。本機以 SSH 隧道連到這個埠，不開對外埠。
+gateway 就緒後（含 Discord 換新 session 時的 ShardReady 與伺服器恢復的 GuildAvailable）以 REST 讀回這段時間（往前多讀 3 分鐘），走同一套判斷，已轉過的訊息以連結去重（保留 7 天）。
+只讀 Bot 看得到且能讀歷史、斷線後有新訊息的頻道與進行中的討論串，社管論壇除外；上限 50 個頻道、每頻道 5 頁（500 則）、最長回溯 24 小時，
+每次讀取間隔 1 秒。全部讀完才把區間標成 `recovered`。超過上限、某頻道讀不到、讀取失敗，或區間超過 1 小時（期間自動封存的討論串不在
+進行中清單裡，讀不完整），區間關閉並標成未回補，本機據此請維運人員手動補看；回補途中又斷線則重讀一次，不標成已回補。
+回補讀到的觸發一樣受每人每小時 6 筆、全伺服器 60 筆的限速，長時間斷線後可能壓縮接下來一小時的額度。本機以 SSH 隧道連到這個埠，不開對外埠。
 
 監控：`hearthkeeper_relay_events_total{kind,outcome}`（queued／coalesced／rate_limited）、
 `hearthkeeper_relay_pending_events`、`hearthkeeper_relay_oldest_pending_age_seconds`、

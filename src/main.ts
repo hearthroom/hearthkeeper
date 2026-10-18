@@ -4,13 +4,18 @@ import { DiscordCases } from "./cases/discord.js";
 import { DiscordPrivateCases } from "./cases/private-discord.js";
 import { PrivateDeliveryWorker } from "./cases/private-delivery.js";
 import { DeliveryWorker } from "./cases/delivery.js";
-import { Client, Events, type Message } from "discord.js";
+import { Client, Events, PermissionFlagsBits, type Message } from "discord.js";
 import { loadConfig } from "./config.js";
-import { createRuntime, gatewayIntents, presenceActivity } from "./runtime.js";
+import {
+  createRuntime,
+  gatewayIntents,
+  gatewayReadinessEvents,
+  presenceActivity,
+} from "./runtime.js";
 import { createHealthServer } from "./health.js";
 import { Relay, RelayStore, relayRoute } from "./relay/core.js";
 import { relayInput } from "./relay/discord.js";
-import { backfill } from "./relay/backfill.js";
+import { backfill, GapRecovery } from "./relay/backfill.js";
 
 async function start() {
   const config = loadConfig(process.env);
@@ -155,56 +160,60 @@ async function start() {
           if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
         })
       : Promise.resolve();
-  let recovering = false;
   // Discord does not replay what a new gateway session missed: read the gap back over REST.
-  const recover = async () => {
-    const gap = relayStore?.openGap();
-    if (!relayStore || !gap || recovering) return;
-    recovering = true;
-    try {
-      const guild = await client.guilds.fetch(config.guildId);
-      const r = await backfill<Message>(
-        {
-          listChannels: async () => {
-            const channels = [...(await guild.channels.fetch()).values()];
-            const threads = [...(await guild.channels.fetchActiveThreads()).threads.values()];
-            return [...channels, ...threads].flatMap((c) =>
-              c &&
-              c.isTextBased() &&
-              !(c.isThread() && c.parentId === config.cases?.forumId)
-                ? [{ id: c.id, lastMessageId: c.lastMessageId ?? null }]
-                : [],
-            );
-          },
-          fetchAfter: async (id, after) => {
-            const c = await client.channels.fetch(id);
-            if (!c?.isTextBased()) return [];
-            const page = await c.messages.fetch({ after, limit: 100 });
-            return [...page.values()].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
-          },
-          handle: relayMessage,
-          sleep: (ms) => new Promise((r) => setTimeout(r, ms).unref()),
+  const readBack = async (from: number) => {
+    const guild = await client.guilds.fetch(config.guildId);
+    const me = await guild.members.fetchMe();
+    return backfill<Message>(
+      {
+        listChannels: async () => {
+          const channels = [...(await guild.channels.fetch()).values()];
+          const threads = [...(await guild.channels.fetchActiveThreads()).threads.values()];
+          return [...channels, ...threads].flatMap((c) =>
+            c &&
+            c.isTextBased() &&
+            !(c.isThread() && c.parentId === config.cases?.forumId) &&
+            // The bot cannot have been mentioned where it cannot read; listing those would only fail.
+            c.permissionsFor(me)?.has([
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.ReadMessageHistory,
+            ])
+              ? [{ id: c.id, lastMessageId: c.lastMessageId ?? null }]
+              : [],
+          );
         },
-        gap.from,
-        Date.now(),
-      );
-      runtime.relayMetrics.backfill(r.complete ? "complete" : "partial");
-      // A disconnect during the read keeps the gap open; the next ready reads it again.
-      if (gatewayReady()) relayStore.gatewayUp(Date.now(), r.complete);
-      status(r.complete ? "relay_backfill_complete" : "relay_backfill_partial");
-    } catch {
-      runtime.relayMetrics.backfill("failed");
-      status("relay_backfill_failed");
-    } finally {
-      recovering = false;
-    }
+        fetchAfter: async (id, after) => {
+          const c = await client.channels.fetch(id);
+          if (!c?.isTextBased()) return [];
+          const page = await c.messages.fetch({ after, limit: 100 });
+          return [...page.values()].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+        },
+        handle: relayMessage,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms).unref()),
+      },
+      from,
+      Date.now(),
+    );
   };
+  const recovery = relayStore
+    ? new GapRecovery({
+        store: relayStore,
+        now: Date.now,
+        ready: gatewayReady,
+        read: readBack,
+        record: (outcome) => {
+          runtime.relayMetrics.backfill(outcome);
+          status("relay_backfill_" + outcome);
+        },
+      })
+    : undefined;
   const updateReady = () => {
     const ready = gatewayReady();
     runtime.setReady(ready);
-    if (ready) void recover();
-    else relayStore?.gatewayDown(Date.now());
+    if (ready) void recovery?.up();
+    else recovery?.down();
   };
+
 
   client.on(Events.ClientReady, (readyClient) => {
     readyClient.user.setActivity(presenceActivity);
@@ -214,17 +223,14 @@ async function start() {
   });
   client.on(Events.ShardDisconnect, () => {
     runtime.setReady(false);
-    relayStore?.gatewayDown(Date.now());
+    recovery?.down();
     status("gateway_disconnected");
   });
   client.on(Events.ShardReconnecting, () => {
     runtime.setReady(false);
-    relayStore?.gatewayDown(Date.now());
+    recovery?.down();
   });
-  client.on(Events.ShardResume, updateReady);
-  client.on(Events.GuildCreate, updateReady);
-  client.on(Events.GuildDelete, updateReady);
-  client.on(Events.GuildUnavailable, updateReady);
+  for (const event of gatewayReadinessEvents) client.on(event, updateReady);
   client.on(Events.Error, () => status("discord_error"));
   client.on(Events.ShardError, () => status("gateway_error"));
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -274,7 +280,7 @@ async function start() {
     if (stopping) return;
     stopping = true;
     runtime.setReady(false);
-    relayStore?.gatewayDown(Date.now());
+    recovery?.down();
     clearInterval(timer);
     clearInterval(communityTimer);
     clearInterval(relayTimer);

@@ -19,6 +19,8 @@ export interface BackfillLimits {
   maxChannels: number;
   maxPagesPerChannel: number;
   maxWindowMs: number;
+  /** Threads archived during a longer gap drop out of the active list, so such a gap cannot be read completely. */
+  activeThreadMs: number;
   /** Read from slightly before the gap so a message at its edge is not missed. */
   marginMs: number;
   pauseMs: number;
@@ -28,8 +30,10 @@ const defaults: BackfillLimits = {
   maxChannels: 50,
   maxPagesPerChannel: 5,
   maxWindowMs: 86_400_000,
-  marginMs: 60_000,
+  // A dead connection can go unnoticed for about two heartbeats before reconnecting; duplicates are dropped anyway.
+  marginMs: 180_000,
   pauseMs: 1000,
+  activeThreadMs: 3_600_000,
 };
 
 export async function backfill<M extends { id: string }>(
@@ -39,7 +43,7 @@ export async function backfill<M extends { id: string }>(
   limits: Partial<BackfillLimits> = {},
 ) {
   const l = { ...defaults, ...limits };
-  let complete = gapFrom - l.marginMs >= now - l.maxWindowMs;
+  let complete = gapFrom - l.marginMs >= now - l.maxWindowMs && now - gapFrom <= l.activeThreadMs;
   const start = snowflakeAt(Math.max(gapFrom - l.marginMs, now - l.maxWindowMs));
   const active = (await deps.listChannels()).filter(
     (c) => c.lastMessageId && BigInt(c.lastMessageId) > BigInt(start),
@@ -69,4 +73,67 @@ export async function backfill<M extends { id: string }>(
     }
   }
   return { channels: channels.length, messages, complete };
+}
+
+interface GapStore {
+  openGap(): { from: number } | null;
+  gatewayDown(now: number): void;
+  gatewayUp(now: number, recovered: boolean): void;
+}
+
+/**
+ * Runs the read-back whenever the gateway becomes ready with a gap open. A disconnect during the
+ * read bumps the generation, so the gap is read again rather than marked recovered; a failed or
+ * partial read closes the gap as not recovered so the operators' machine tells someone to look.
+ */
+export class GapRecovery {
+  private generation = 0;
+  private running: Promise<void> | null = null;
+  private again = false;
+  constructor(
+    private o: {
+      store: GapStore;
+      now: () => number;
+      ready: () => boolean;
+      read: (from: number) => Promise<{ complete: boolean }>;
+      record: (outcome: "complete" | "partial" | "failed") => void;
+    },
+  ) {}
+  down() {
+    this.generation++;
+    this.o.store.gatewayDown(this.o.now());
+  }
+  async up() {
+    if (this.running) {
+      this.again = true;
+      return this.running;
+    }
+    this.running = this.loop();
+    try {
+      await this.running;
+    } finally {
+      this.running = null;
+    }
+  }
+  private async loop() {
+    do {
+      this.again = false;
+      const gap = this.o.store.openGap();
+      if (!gap) return;
+      const generation = this.generation;
+      let outcome: "complete" | "partial" | "failed";
+      try {
+        outcome = (await this.o.read(gap.from)).complete ? "complete" : "partial";
+      } catch {
+        outcome = "failed";
+      }
+      if (!this.o.ready()) return;
+      if (generation !== this.generation) {
+        this.again = true;
+        continue;
+      }
+      this.o.store.gatewayUp(this.o.now(), outcome === "complete");
+      this.o.record(outcome);
+    } while (this.again);
+  }
 }

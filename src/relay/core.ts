@@ -98,7 +98,7 @@ export class RelayStore {
   constructor(private db: DatabaseSync) {
     db.exec(`CREATE TABLE IF NOT EXISTS relay_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,channel_id TEXT NOT NULL,channel_name TEXT NOT NULL,first_message TEXT NOT NULL,last_message TEXT NOT NULL,count INTEGER NOT NULL,suppressed INTEGER NOT NULL,reply_to TEXT,reply_to_digest INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS relay_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS relay_gaps(started_at INTEGER PRIMARY KEY,ended_at INTEGER);
+ CREATE TABLE IF NOT EXISTS relay_gaps(started_at INTEGER PRIMARY KEY,ended_at INTEGER,recovered INTEGER NOT NULL DEFAULT 0);
  CREATE TABLE IF NOT EXISTS relay_seen(link TEXT PRIMARY KEY,at INTEGER NOT NULL);`);
     // Added after the first release: older databases lack the column.
     if (!(db.prepare("SELECT 1 FROM pragma_table_info('relay_gaps') WHERE name='recovered'").get()))

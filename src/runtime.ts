@@ -1,6 +1,7 @@
 import { Registry, Counter, Gauge, Histogram } from "@prometheus-io/client";
 import {
   ActivityType,
+  Events,
   GatewayIntentBits,
   MessageFlags,
   type InteractionReplyOptions,
@@ -12,6 +13,15 @@ export const gatewayIntents = [
   GatewayIntentBits.Guilds,
   GatewayIntentBits.GuildMessages,
 ];
+/** Events after which the gateway may have become usable again; a fresh session only emits ShardReady and GuildAvailable. */
+export const gatewayReadinessEvents = [
+  Events.ShardReady,
+  Events.ShardResume,
+  Events.GuildCreate,
+  Events.GuildAvailable,
+  Events.GuildDelete,
+  Events.GuildUnavailable,
+] as const;
 export const presenceActivity = {
   name: "Custom Status",
   type: ActivityType.Custom,
