@@ -155,7 +155,10 @@ export class RelayStore {
     if (out.length) this.raise("handed", out.at(-1)!.seq);
     return out;
   }
-  /** A cursor from an older stream may be ahead of this one; it cannot acknowledge events it never saw. */
+  /**
+   * A cursor from an older stream may be ahead of this one; it cannot acknowledge events it never saw.
+   * Consumers advance the cursor only from returned events; after a stream change they restart from 0.
+   */
   ack(after: number) {
     this.raise("acked", Math.min(after, this.metaNumber("handed")));
   }

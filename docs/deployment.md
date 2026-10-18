@@ -214,6 +214,7 @@ Bot 只記中繼資料：種類（mention／reply／case-thread）、頻道名�
 監控：`hearthkeeper_relay_events_total{kind,outcome}`（queued／coalesced／rate_limited）、
 `hearthkeeper_relay_pending_events`、`hearthkeeper_relay_oldest_pending_age_seconds`、
 `hearthkeeper_relay_last_pull_timestamp_seconds`、`hearthkeeper_relay_reference_fetch_total{outcome}`。
-本機接收端在線時 `time()-hearthkeeper_relay_last_pull_timestamp_seconds` 應小於 30。
+本機接收端在線時 `time()-hearthkeeper_relay_last_pull_timestamp_seconds` 應小於 30（未啟用 relay 時此值恆為 0，不要套這條檢查）。
+本機游標只從回傳的事件推進；`streamId` 改變時從 0 重拉，不要直接跳到 `latestSeq`，否則跳過的事件會一直算在待送裡。
 
 回退：`COMMUNITY_RELAY=false` 後重啟即停止記錄；既有資料表保留，7 天內不再讀取也無影響。
