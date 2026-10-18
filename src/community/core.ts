@@ -77,6 +77,12 @@ export class CommunityStore {
   beginReviewAttempt(id:string,channel:string,now:number){this.db.prepare('INSERT OR IGNORE INTO review_attempts VALUES(?,?,?)').run(id,channel,now);}
   reviewAttempt(id:string,channel:string){return (this.db.prepare('SELECT started_at FROM review_attempts WHERE id=? AND channel=?').get(id,channel) as {started_at:number}|undefined)?.started_at;}
   finishReviewAttempt(id:string,channel:string){this.db.prepare('DELETE FROM review_attempts WHERE id=? AND channel=?').run(id,channel);}
+  /** Whether a message the bot posted is one of its daily update digests. */
+  isUpdateDigest(messageId: string) {
+    return !!this.db
+      .prepare("SELECT 1 FROM deliveries WHERE external_id=? AND id LIKE 'update:%'")
+      .get(messageId);
+  }
   /** A digest a channel still has to receive; the website only tracks one delivery per day and language. */
   oweUpdate(day:string,locale:string,channel:string,now:number){this.db.prepare('INSERT OR IGNORE INTO update_owed VALUES(?,?,?,?)').run(day,locale,channel,now);}
   settleUpdate(day:string,locale:string,channel:string){this.db.prepare('DELETE FROM update_owed WHERE day=? AND locale=? AND channel=?').run(day,locale,channel);}

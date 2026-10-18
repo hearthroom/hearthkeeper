@@ -168,6 +168,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     const reviewLocale=env.COMMUNITY_REVIEW_LOCALE??'zh-Hant';
     if(!reviewLocales.includes(reviewLocale as ReviewLocale))throw new Error('Invalid COMMUNITY_REVIEW_LOCALE');
     if(env.COMMUNITY_REVIEW_V2 && !['true','false'].includes(env.COMMUNITY_REVIEW_V2))throw new Error('Invalid COMMUNITY_REVIEW_V2');
+    if(env.COMMUNITY_RELAY && !['true','false'].includes(env.COMMUNITY_RELAY))throw new Error('Invalid COMMUNITY_RELAY');
     const reviewChannel = env.COMMUNITY_REVIEW_CHANNEL
       ? snowflake("COMMUNITY_REVIEW_CHANNEL")
       : undefined;
@@ -185,6 +186,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       throw new Error("Invalid COMMUNITY_UPDATES_CHANNELS");
     community = {
       reviewV2:env.COMMUNITY_REVIEW_V2==='true',
+      relay:env.COMMUNITY_RELAY==='true',
       reviewLocale:reviewLocale as ReviewLocale,
       site: site.origin,
       key,

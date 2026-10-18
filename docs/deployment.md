@@ -193,3 +193,26 @@ zh-Hans、en、ja、ko。同一語言可以列多個頻道（例如告示牌加�
 labels 不含頻道、案件、成員或更新 ID。
 
 回退：移除 `COMMUNITY_UPDATES_CHANNELS` 後重啟即停止發摘要；已加入案件的系統紀錄保留。
+
+## 提及轉派（relay）
+
+讓維運人員的本機在 1 分鐘內知道有人 @ Bot、回覆 Bot 的訊息，或在私人回報討論串發言。在受限環境檔
+設定 `COMMUNITY_RELAY=true` 後重啟；需同時啟用社群功能，資料表放在 `COMMUNITY_DATABASE_PATH` 的同一個 SQLite。
+
+Bot 只記中繼資料：種類（mention／reply／case-thread）、頻道名、訊息連結、合併筆數、是否回覆每日摘要。
+不讀內容、不存作者；合併與限速用的作者 ID 只在記憶體，一小時到期、重啟清空。社管論壇不轉；
+私人討論串裡員工的發言不轉。Bot 不對觸發訊息做任何回覆。
+
+同一作者在同一頻道的連續發言併成一筆：最後一則後 10 秒沒有新訊息才交出（最長 30 秒）。每位作者每小時
+最多 6 筆、全伺服器每小時最多 60 筆，超過的只計數，下一筆帶 `suppressed`。事件保留 7 天。
+
+讀取只走 loopback：`GET 127.0.0.1:<METRICS_PORT>/relay/events?after=<seq>&wait=<0-25>`。有新事件立刻回，
+沒有就最多等 `wait` 秒回空陣列。回應帶 `streamId`（資料表重建會變）、`latestSeq`、`gap`（游標早於
+保留期）、`gatewayReady` 與 Bot 和 Discord 的斷線區間。本機以 SSH 隧道連到這個埠，不開對外埠。
+
+監控：`hearthkeeper_relay_events_total{kind,outcome}`（queued／coalesced／rate_limited）、
+`hearthkeeper_relay_pending_events`、`hearthkeeper_relay_oldest_pending_age_seconds`、
+`hearthkeeper_relay_last_pull_timestamp_seconds`、`hearthkeeper_relay_reference_fetch_total{outcome}`。
+本機接收端在線時 `time()-hearthkeeper_relay_last_pull_timestamp_seconds` 應小於 30。
+
+回退：`COMMUNITY_RELAY=false` 後重啟即停止記錄；既有資料表保留，7 天內不再讀取也無影響。

@@ -27,6 +27,8 @@ export interface CommunityConfig {
   roles: { id: string; level?: number; badge?: string; linked?: boolean }[];
   reviewChannel?: string;
   reviewV2?: boolean;
+  /** Hand @-mentions and replies to the bot to the operators' machine (metadata only). */
+  relay?: boolean;
   reviewLocale?: ReviewLocale;
   /** Public announcement channel per language for the daily update digest; absent turns digests off. */
   updates?: UpdateChannels;

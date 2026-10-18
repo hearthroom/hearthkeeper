@@ -280,6 +280,11 @@ export function createRuntime(config: Config) {
   const reviewOldest=new Gauge({name:'hearthkeeper_review_oldest_pending_age_seconds',help:'Age of the oldest undelivered review update.',registers:[registry]});
   const reviewHealth=new Gauge({name:'hearthkeeper_review_last_poll_timestamp_seconds',help:'Last successful review queue read.',registers:[registry]});
   const updateDelivery=new Counter({name:'hearthkeeper_update_delivery_total',help:'Daily update digest delivery outcomes.',labelNames:['outcome'],registers:[registry]});
+  const relayEvents=new Counter({name:'hearthkeeper_relay_events_total',help:'Mentions and replies to the bot handed to operators.',labelNames:['kind','outcome'],registers:[registry]});
+  const relayPending=new Gauge({name:'hearthkeeper_relay_pending_events',help:'Relay events not yet acknowledged by the operators machine.',registers:[registry]});
+  const relayOldest=new Gauge({name:'hearthkeeper_relay_oldest_pending_age_seconds',help:'Age of the oldest unacknowledged relay event.',registers:[registry]});
+  const relayPull=new Gauge({name:'hearthkeeper_relay_last_pull_timestamp_seconds',help:'Last time the operators machine read relay events.',registers:[registry]});
+  const relayFetch=new Counter({name:'hearthkeeper_relay_reference_fetch_total',help:'Reads of a replied-to message to tell whether it was the bot.',labelNames:['outcome'],registers:[registry]});
   const updateReport=new Counter({name:'hearthkeeper_update_report_total',help:'Shipped notes added to reports.',labelNames:['outcome'],registers:[registry]});
   reviewHealth.set(0);
   let ready = false;
@@ -291,6 +296,12 @@ export function createRuntime(config: Config) {
         if(lag!==undefined&&Number.isFinite(lag))reviewLag.observe(Math.max(0,lag));
       },
       health(count:number,oldest:number|null){reviewPending.set(count);reviewOldest.set(oldest===null?0:Math.max(0,(Date.now()-oldest)/1000));reviewHealth.set(Date.now()/1000);},
+    },
+    relayMetrics:{
+      event(kind:string,outcome:string){relayEvents.inc({kind:['mention','reply','case-thread'].includes(kind)?kind:'mention',outcome:['queued','coalesced','rate_limited'].includes(outcome)?outcome:'queued'});},
+      fetch(outcome:'success'|'failure'){relayFetch.inc({outcome});},
+      pulled(pending:number,oldestAgeMs:number){relayPending.set(pending);relayOldest.set(oldestAgeMs/1000);relayPull.set(Date.now()/1000);},
+      health(pending:number,oldestAgeMs:number){relayPending.set(pending);relayOldest.set(oldestAgeMs/1000);},
     },
     updateMetrics:{
       delivery(outcome:string){updateDelivery.inc({outcome:['sent','updated','deleted','failed','suppressed'].includes(outcome)?outcome:'failed'});},

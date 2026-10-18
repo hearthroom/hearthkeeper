@@ -8,6 +8,8 @@ import { Client, Events } from "discord.js";
 import { loadConfig } from "./config.js";
 import { createRuntime, gatewayIntents, presenceActivity } from "./runtime.js";
 import { createHealthServer } from "./health.js";
+import { Relay, RelayStore, relayRoute } from "./relay/core.js";
+import { relayInput } from "./relay/discord.js";
 
 async function start() {
   const config = loadConfig(process.env);
@@ -71,6 +73,31 @@ async function start() {
         runtime.updateMetrics,
       )
     : undefined;
+  const relayStore =
+    community && config.community?.relay
+      ? new RelayStore(community.store.db)
+      : undefined;
+  const gatewayReady = () =>
+    client.isReady() &&
+    Boolean(client.guilds.cache.get(config.guildId)?.available);
+  const relay = relayStore
+    ? new Relay(relayStore, {
+        now: Date.now,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        gatewayReady,
+      })
+    : undefined;
+  const relayHealth = (pulled: boolean) => {
+    if (!relayStore) return;
+    const s = relayStore.stats(Date.now());
+    if (pulled) runtime.relayMetrics.pulled(s.pending, s.oldestAgeMs);
+    else runtime.relayMetrics.health(s.pending, s.oldestAgeMs);
+  };
+  const relayTimer = setInterval(() => {
+    relayStore?.prune(Date.now());
+    relayHealth(false);
+  }, 60000);
+  relayTimer.unref();
   const communityTimer = setInterval(() => void community?.tick(), 15000);
   communityTimer.unref();
   let ticking = false;
@@ -111,11 +138,12 @@ async function start() {
   const timer = setInterval(() => void tick(), 15000);
   timer.unref();
   const status = (event: string) => console.log(JSON.stringify({ event }));
-  const updateReady = () =>
-    runtime.setReady(
-      client.isReady() &&
-        Boolean(client.guilds.cache.get(config.guildId)?.available),
-    );
+  const updateReady = () => {
+    const ready = gatewayReady();
+    runtime.setReady(ready);
+    if (ready) relayStore?.gatewayUp(Date.now());
+    else relayStore?.gatewayDown(Date.now());
+  };
 
   client.on(Events.ClientReady, (readyClient) => {
     readyClient.user.setActivity(presenceActivity);
@@ -125,9 +153,13 @@ async function start() {
   });
   client.on(Events.ShardDisconnect, () => {
     runtime.setReady(false);
+    relayStore?.gatewayDown(Date.now());
     status("gateway_disconnected");
   });
-  client.on(Events.ShardReconnecting, () => runtime.setReady(false));
+  client.on(Events.ShardReconnecting, () => {
+    runtime.setReady(false);
+    relayStore?.gatewayDown(Date.now());
+  });
   client.on(Events.ShardResume, updateReady);
   client.on(Events.GuildCreate, updateReady);
   client.on(Events.GuildDelete, updateReady);
@@ -157,6 +189,20 @@ async function start() {
   });
 
   client.on(Events.MessageCreate, async (message) => {
+    if (relay && community)
+      void relayInput(message, {
+        guildId: config.guildId,
+        botId: client.user?.id ?? config.applicationId,
+        staffRoleIds: config.cases?.staffRoleIds ?? [],
+        forumId: config.cases?.forumId,
+        privateCaseThread: (id) => !!store?.privateCaseForThread(id),
+        digestMessage: (id) => community.store.isUpdateDigest(id),
+        recordFetch: runtime.relayMetrics.fetch,
+      })
+        .then((input) => {
+          if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
+        })
+        .catch(() => status("relay_failed"));
     try {
       community?.onMessage(message);
       if (cases && (await cases.onStaffMessage(message))) void tick();
@@ -166,7 +212,10 @@ async function start() {
     }
   });
 
-  const server = createHealthServer(runtime);
+  const server = createHealthServer(
+    runtime,
+    relay ? relayRoute(relay, () => relayHealth(true)) : undefined,
+  );
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(config.metricsPort, config.metricsHost, resolve);
@@ -179,6 +228,7 @@ async function start() {
     runtime.setReady(false);
     clearInterval(timer);
     clearInterval(communityTimer);
+    clearInterval(relayTimer);
     server.close();
     await client.destroy();
     status("stopped");
