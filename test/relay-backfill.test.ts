@@ -251,3 +251,29 @@ test("a storage error during recovery is reported, not thrown", async () => {
   await assert.doesNotReject(rec.up());
   assert.deepEqual(outcomes, ["failed"]);
 });
+
+test("a storage error while recording a disconnect is reported, not thrown", async () => {
+  const outcomes: string[] = [];
+  let reads = 0;
+  const rec = new GapRecovery({
+    store: {
+      openGap: () => ({ from: 1 }),
+      gatewayDown: () => {
+        throw new Error("database is locked");
+      },
+      gatewayUp: () => {},
+    },
+    now: () => 2,
+    ready: () => true,
+    read: async () => {
+      reads++;
+      rec.down();
+      return { complete: true };
+    },
+    record: (o) => outcomes.push(o),
+  });
+  assert.doesNotThrow(() => rec.down());
+  await rec.up();
+  assert.equal(reads, 1, "the disconnect still counts even though it could not be stored");
+  assert.deepEqual(outcomes, ["failed", "failed"]);
+});

@@ -105,7 +105,12 @@ export class GapRecovery {
   down() {
     this.connected = false;
     this.generation++;
-    this.o.store.gatewayDown(this.o.now());
+    try {
+      this.o.store.gatewayDown(this.o.now());
+    } catch {
+      // Called from Discord event listeners: a storage error must not escape into the gateway code.
+      this.o.record("failed");
+    }
   }
   async up() {
     this.connected = true;
