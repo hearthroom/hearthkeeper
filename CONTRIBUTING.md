@@ -5,12 +5,12 @@
 
 ## 提交身分
 
-專案維護者使用 `Hearth Room <contact@hearthroom.club>`。
+專案維護者使用 `Suki <suki@sukisuki.ai>`。
 請在此倉庫設定本機 Git 身分，不要更動其他專案或全域設定：
 
 ```sh
-git config --local user.name 'Hearth Room'
-git config --local user.email 'contact@hearthroom.club'
+git config --local user.name 'Suki'
+git config --local user.email 'suki@sukisuki.ai'
 git config --local user.useConfigOnly true
 git config --local user.signingkey ''
 git config --local commit.gpgsign false
