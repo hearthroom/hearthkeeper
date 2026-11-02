@@ -1,4 +1,4 @@
-import { ChannelType, type Message } from "discord.js";
+import { ChannelType, type Message, type ThreadChannel } from "discord.js";
 import { relayKind, type RelayInput } from "./core.js";
 
 export interface RelayContext {
@@ -90,5 +90,25 @@ export async function relayInput(m: Message, ctx: RelayContext): Promise<RelayIn
     ...(kind === "reply" && ref
       ? { replyTo: link(ctx.guildId, m.channelId, ref), replyToDigest: ctx.digestMessage(ref) }
       : {}),
+  };
+}
+
+
+/** A report starts at its first post, which may arrive after THREAD_CREATE. Both gateway
+ * paths and reconnect backfill call this; the durable thread key handles their races. */
+export async function relayNewReport(
+  thread: ThreadChannel,
+  ctx: { guildId: string; botId: string; reportParentId?: string; seen: (id: string) => boolean },
+): Promise<RelayInput | null> {
+  if (thread.guildId !== ctx.guildId || !ctx.reportParentId || thread.parentId !== ctx.reportParentId || ctx.seen(thread.id))
+    return null;
+  const first = [...(await thread.messages.fetch({ after: "0", limit: 1 })).values()][0];
+  if (!first || first.system || ![0, 19].includes(first.type)) return null;
+  return {
+    kind: "new-report",
+    authorId: first.author.id,
+    channelId: thread.id,
+    channelName: `${thread.parent?.name ?? "?"} / ${thread.name}`,
+    messageLink: link(ctx.guildId, thread.id, first.id),
   };
 }

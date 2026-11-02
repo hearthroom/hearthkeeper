@@ -268,3 +268,26 @@ test("staff replies in the reporter conversation advance the same case without r
     f.done();
   }
 });
+
+test('a first successful private sync emits case-opened before acknowledging its version and retries failures', async () => {
+  const f = fixture();
+  const tr = transport();
+  let attempts = 0;
+  try {
+    const c = f.create();
+    const worker = new PrivateDeliveryWorker(f.store, tr.t, () => {}, (p, view) => {
+      attempts++;
+      assert.equal(p.events[0]?.status, 'done');
+      assert.equal(view.id, c.id);
+      if (attempts === 1) throw new Error('relay unavailable');
+    });
+    await worker.run();
+    assert.equal(attempts, 1);
+    assert.equal(f.store.read(owner, c.id).privatePending, true);
+    await worker.run();
+    assert.equal(attempts, 2);
+    assert.equal(f.store.read(owner, c.id).privatePending, false);
+    await worker.run();
+    assert.equal(attempts, 2);
+  } finally { f.done(); }
+});

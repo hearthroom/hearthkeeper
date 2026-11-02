@@ -415,3 +415,57 @@ test("unknown relay paths are not found", async () => {
   const { relay } = setup();
   assert.equal((await relayRoute(relay, () => {})("/relay/other"))!.status, 404);
 });
+
+
+test("new reports are queued once per thread across duplicate events, restarts and retention", async () => {
+  const db = new DatabaseSync(":memory:");
+  const store = new RelayStore(db);
+  let now = 1_000_000;
+  const options = { now: () => now, sleep: async () => {}, gatewayReady: () => true, settleMs: 0 };
+  const relay = new Relay(store, options);
+  const report = input({ kind: "new-report", channelId: "thread-a" }) as Parameters<Relay["observe"]>[0];
+  assert.equal(relay.observe(report), "queued");
+  assert.equal(relay.observe({ ...report, messageLink: "another-first-message" }), "duplicate");
+  // Reports are independent of the shared bot author's normal chatter budget.
+  for (let i = 0; i < 8; i++)
+    assert.equal(relay.observe({ ...report, channelId: `thread-${i}` }), "queued");
+  assert.equal((await relay.events(0, 0)).events.length, 9);
+  const player = input({ kind: "case-thread", channelId: report.channelId });
+  assert.equal(relay.observe(player), "queued", "later player messages still relay");
+  now += 8 * 86_400_000;
+  store.prune(now);
+  const restarted = new Relay(new RelayStore(db), options);
+  assert.equal(restarted.observe(report), "duplicate", "an old thread is never announced again");
+});
+
+test("new report adapter reads the first post for bot or player threads in the configured parent only", async () => {
+  const { relayNewReport } = await import("../src/relay/discord.js");
+  const { ChannelType } = await import("discord.js");
+  const ctx = { guildId: guild, botId: bot, reportParentId: "parent", seen: () => false };
+  let reads = 0;
+  let posts = [{ id: "first", type: 0, system: false, author: { id: bot, bot: true } }];
+  const thread = (over = {}) => ({
+    id: "report", guildId: guild, parentId: "parent", parent: { name: "Reports" },
+    name: "Test report", type: ChannelType.PrivateThread, ownerId: bot,
+    isThread: () => true,
+    messages: { fetch: async (query: unknown) => {
+      reads++;
+      assert.deepEqual(query, { after: "0", limit: 1 });
+      return new Map(posts.map((m) => [m.id, m]));
+    } },
+    ...over,
+  }) as never;
+  const report = await relayNewReport(thread(), ctx);
+  assert.equal(report?.kind, "new-report");
+  assert.equal(report?.messageLink, `https://discord.com/channels/${guild}/report/first`);
+  assert.equal(report?.channelName, "Reports / Test report");
+  assert.equal(await relayNewReport(thread(), { ...ctx, seen: () => true }), null);
+  assert.equal(reads, 1, "known threads need no REST read");
+  assert.equal(await relayNewReport(thread({ parentId: "other" }), ctx), null);
+  assert.equal(await relayNewReport(thread({ guildId: "other" }), ctx), null);
+  assert.equal(await relayNewReport(thread(), { ...ctx, reportParentId: undefined }), null);
+  posts = [];
+  assert.equal(await relayNewReport(thread(), ctx), null, "thread-create can precede the first post");
+  posts = [{ id: "player-post", type: 0, system: false, author: { id: "player", bot: false } }];
+  assert.equal((await relayNewReport(thread({ ownerId: "player" }), ctx))?.kind, "new-report");
+});

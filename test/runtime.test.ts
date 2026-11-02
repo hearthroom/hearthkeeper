@@ -280,3 +280,22 @@ test("case interaction metrics use bounded kinds and outcomes without case ident
   assert.match(text, /hearthkeeper_case_interactions_total\{kind="command",outcome="denied"\} 1/);
   assert.ok(!text.includes(env.DISCORD_GUILD_ID));
 });
+
+
+test("new report relay metrics expose bounded kind and delivery outcomes", async () => {
+  const runtime = createRuntime(loadConfig(env));
+  runtime.relayMetrics.event("new-report", "queued");
+  runtime.relayMetrics.event("new-report", "duplicate");
+  const metrics = await runtime.metrics();
+  assert.match(metrics, /hearthkeeper_relay_events_total\{kind="new-report",outcome="queued"\} 1/);
+  assert.match(metrics, /hearthkeeper_relay_events_total\{kind="new-report",outcome="duplicate"\} 1/);
+});
+
+test('case-admin metrics publish durable totals on every scrape with bounded labels', async () => {
+  let totals = [{ action: 'reply', outcome: 'success', total: 2 }];
+  const runtime = createRuntime(loadConfig(env), () => totals);
+  assert.match(await runtime.metrics(), /hearthkeeper_case_admin_total\{action="reply",outcome="success"\} 2/);
+  assert.match(await runtime.metrics(), /hearthkeeper_case_admin_total\{action="reply",outcome="success"\} 2/);
+  totals = [{ action: 'reply', outcome: 'success', total: 3 }];
+  assert.match(await runtime.metrics(), /hearthkeeper_case_admin_total\{action="reply",outcome="success"\} 3/);
+});

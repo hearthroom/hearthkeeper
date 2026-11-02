@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+umask 077
+exec /opt/hearthkeeper/node/bin/node "$(dirname "$0")/../dist/src/case-admin.js"

@@ -6,6 +6,7 @@ import {
   MessageFlags,
   type InteractionReplyOptions,
 } from "discord.js";
+import { supportActions, type AdminCount } from './cases/admin.js';
 import type { Config } from "./config.js";
 import { localize, userLanguage, type UserLanguage } from "./locale.js";
 
@@ -220,7 +221,7 @@ function menu(language: UserLanguage, site: string): InteractionReplyOptions {
   };
 }
 
-export function createRuntime(config: Config) {
+export function createRuntime(config: Config, adminCounts: () => AdminCount[] = () => []) {
   const registry = new Registry();
   const interactions = new Counter({
     name: "hearthkeeper_interactions_total",
@@ -290,7 +291,20 @@ export function createRuntime(config: Config) {
   const reviewOldest=new Gauge({name:'hearthkeeper_review_oldest_pending_age_seconds',help:'Age of the oldest undelivered review update.',registers:[registry]});
   const reviewHealth=new Gauge({name:'hearthkeeper_review_last_poll_timestamp_seconds',help:'Last successful review queue read.',registers:[registry]});
   const updateDelivery=new Counter({name:'hearthkeeper_update_delivery_total',help:'Daily update digest delivery outcomes.',labelNames:['outcome'],registers:[registry]});
-  const relayEvents=new Counter({name:'hearthkeeper_relay_events_total',help:'Mentions and replies to the bot handed to operators.',labelNames:['kind','outcome'],registers:[registry]});
+  new Counter({
+    name: 'hearthkeeper_case_admin_total', help: 'Private support command attempts.',
+    labelNames: ['action', 'outcome'], registers: [registry],
+    collect() {
+      const rows = adminCounts();
+      this.reset();
+      for (const r of rows) {
+        if ([...supportActions, 'show', 'other'].includes(r.action as typeof supportActions[number]) &&
+            ['success', 'conflict', 'denied', 'failed'].includes(r.outcome) && Number.isSafeInteger(r.total) && r.total >= 0)
+          this.inc({ action: r.action, outcome: r.outcome }, r.total);
+      }
+    },
+  });
+  const relayEvents=new Counter({name:'hearthkeeper_relay_events_total',help:'Mentions, replies and new reports handed to operators.',labelNames:['kind','outcome'],registers:[registry]});
   const relayPending=new Gauge({name:'hearthkeeper_relay_pending_events',help:'Relay events not yet acknowledged by the operators machine.',registers:[registry]});
   const relayOldest=new Gauge({name:'hearthkeeper_relay_oldest_pending_age_seconds',help:'Age of the oldest unacknowledged relay event.',registers:[registry]});
   const relayPull=new Gauge({name:'hearthkeeper_relay_last_pull_timestamp_seconds',help:'Last time the operators machine read relay events.',registers:[registry]});
@@ -310,7 +324,7 @@ export function createRuntime(config: Config) {
       health(count:number,oldest:number|null){reviewPending.set(count);reviewOldest.set(oldest===null?0:Math.max(0,(Date.now()-oldest)/1000));reviewHealth.set(Date.now()/1000);},
     },
     relayMetrics:{
-      event(kind:string,outcome:string){relayEvents.inc({kind:['mention','reply','case-thread'].includes(kind)?kind:'mention',outcome:['queued','coalesced','rate_limited','duplicate'].includes(outcome)?outcome:'queued'});},
+      event(kind:string,outcome:string){relayEvents.inc({kind:['mention','reply','case-thread','new-report','case-opened'].includes(kind)?kind:'mention',outcome:['queued','coalesced','rate_limited','duplicate'].includes(outcome)?outcome:'queued'});},
       backfill(outcome:'complete'|'partial'|'failed'){relayBackfill.inc({outcome});},
       fetch(outcome:'success'|'failure'){relayFetch.inc({outcome});},
       pulled(pending:number,oldestAgeMs:number){relayPending.set(pending);relayOldest.set(oldestAgeMs/1000);relayPull.set(Date.now()/1000);},

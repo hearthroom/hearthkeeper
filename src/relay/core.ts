@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 // Only metadata leaves this process: links, channel, kind, counts. Never content, never who wrote it;
 // the author ID lives only in the in-memory coalescing and rate-limit tables below.
 
-export type RelayKind = "mention" | "reply" | "case-thread";
+export type RelayKind = "mention" | "reply" | "case-thread" | "new-report" | "case-opened";
 
 export interface RelayFacts {
   guildId: string | null;
@@ -135,6 +135,21 @@ export class RelayStore {
   firstSight(link: string, now: number) {
     return this.db.prepare("INSERT OR IGNORE INTO relay_seen VALUES(?,?)").run(link, now).changes === 1;
   }
+  queueReport(e: Omit<RelayInput, "authorId">, now: number) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const fresh = this.firstSight(`new-report:${e.channelId}`, now);
+      if (fresh) this.create(e, 0, now);
+      this.db.exec("COMMIT");
+      return fresh;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  reportSeen(threadId: string) {
+    return !!this.db.prepare("SELECT 1 FROM relay_seen WHERE link=?").get(`new-report:${threadId}`);
+  }
   create(e: Omit<RelayInput, "authorId">, suppressed: number, now: number) {
     const r = this.db
       .prepare("INSERT INTO relay_events(kind,channel_id,channel_name,first_message,last_message,count,suppressed,reply_to,reply_to_digest,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?,?,?,?)")
@@ -187,7 +202,7 @@ export class RelayStore {
     if (last.seq !== null) this.raise("pruned", last.seq);
     this.db.prepare("DELETE FROM relay_events WHERE created_at<?").run(cut);
     this.db.prepare("DELETE FROM relay_gaps WHERE ended_at IS NOT NULL AND ended_at<?").run(cut);
-    this.db.prepare("DELETE FROM relay_seen WHERE at<?").run(cut);
+    this.db.prepare("DELETE FROM relay_seen WHERE at<? AND link NOT LIKE 'new-report:%'").run(cut);
   }
   heartbeat(now: number) {
     this.db.prepare("INSERT OR REPLACE INTO relay_meta VALUES('heartbeat',?)").run(String(now));
@@ -262,8 +277,17 @@ export class Relay {
   get streamId() {
     return this.store.streamId();
   }
+  reportSeen(threadId: string) {
+    return this.store.reportSeen(threadId);
+  }
   observe(e: RelayInput): "queued" | "coalesced" | "rate_limited" | "duplicate" {
     const now = this.o.now();
+    if (e.kind === "new-report" || e.kind === "case-opened") {
+      // One durable announcement per report thread. The bot authors many reports, so its
+      // shared identity must not coalesce them or consume the member chatter allowance.
+      const { authorId: _author, ...event } = e;
+      return this.store.queueReport(event, now) ? "queued" : "duplicate";
+    }
     if (!this.store.firstSight(e.messageLink, now)) return "duplicate";
     this.forget(now);
     const key = e.authorId + ":" + e.channelId;

@@ -225,3 +225,59 @@ gateway 就緒後（含 Discord 換新 session 時的 ShardReady 與伺服器恢
 本機游標只從回傳的事件推進；`streamId` 改變時從 0 重拉，不要直接跳到 `latestSeq`，否則跳過的事件會一直算在待送裡。
 
 回退：`COMMUNITY_RELAY=false` 後重啟即停止記錄；既有資料表保留，7 天內不再讀取也無影響。
+
+## Support case commands and new-report relay
+
+A private report's first verified Discord sync queues one `case-opened` relay event,
+with its first-message link and category only. The relay write completes before the
+projection is acknowledged; retries and reconnect backfill deduplicate by thread.
+New threads in the configured private parent without a case mapping use `new-report`.
+`THREAD_CREATE` may arrive before the first post, so `MESSAGE_CREATE` retries the read.
+Thread announcement keys remain after the seven-day event retention period, preventing
+an old report from being announced again when someone later posts in it. No message
+content or member identity is retained in relay events.
+
+The private operator command is `bin/case-admin` in the exact release. It reads one JSON
+object from stdin and the fixed `/etc/hearthkeeper/runtime.env`; it accepts no environment
+path, database path, identity or arbitrary shell command from the caller. When launched
+by root it reads the protected environment, then drops to the `hearthkeeper` OS account
+before opening SQLite, preserving data-file ownership. It does not call Discord directly;
+the normal delivery workers project accepted actions to the forum and private thread.
+
+Input is `action` plus exactly one of `caseId` or `threadId`. `show` is read-only. Writes
+require a positive `version`, an 8–120-character `requestKey` (letters, digits, underscore
+or hyphen) and a 1–1400-character `body`, except `claim`, which has no body. Allowed writes:
+`claim`, `reply`, `request_info`, `set_processing`, `wait_technical`, `discuss`, `pass`,
+`not_adopted`. They all use the fixed audited actor `service:suki-support` and the existing
+`CaseStore.act` state machine. Caller-supplied actor, staff, guild or other fields fail.
+The caller's SSH management access is the authorization boundary; this is not a public
+HTTP or MCP endpoint and grants no additional Discord privileges.
+
+Retries use the original version, key and content. Same-key changed payloads are refused
+using HMAC fingerprints keyed by the existing lookup key; no content is written to the
+fingerprint database. `stale` requires a fresh read and a deliberate new operation.
+Successful command output means SQLite accepted the action; `sync=pending` or
+`privatePending=true` means projection is still pending, so inspect again before claiming
+Discord delivery. Errors return a bounded code and nonzero exit, never raw configuration,
+SQLite errors, keys or tokens.
+
+`<CASE_DATABASE_PATH>.admin-metrics` is a durable SQLite sidecar containing only keyed
+fingerprints and aggregate command counts. Preserve it, its WAL, the original case store
+and keys across releases; back it up consistently alongside the case database. There is
+no new case schema migration. A crash between the case transaction and aggregate-count
+write can undercount attempts; retrying with the original request key is safe.
+
+`hearthkeeper_case_admin_total{action,outcome}` is a Counter collected from durable totals
+on every `/metrics` scrape. `action` is the eight allowed actions, `show` or `other`;
+`outcome` is `success`, `conflict`, `denied` or `failed`. No identifiers or content are
+labels. Verify `/metrics` after a synthetic command, or query
+`sum(increase(hearthkeeper_case_admin_total{outcome="conflict"}[15m]))`.
+New-report verification uses
+`hearthkeeper_relay_events_total{kind="case-opened",outcome="queued"}` and
+`hearthkeeper_relay_pending_events`; after acknowledgement the pending count should return
+to zero. Local operators separately verify that their support inbox received the event.
+
+Deploy the exact pushed source with `npm ci` and `npm run check` in the release, switch
+`current`, restart, then verify `/readyz`, metrics, a new synthetic report, a guarded support
+action and durable readback. Rollback switches `current` back and restarts, retaining both
+databases and keys. Older releases ignore the sidecar and the additional relay kinds.

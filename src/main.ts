@@ -1,10 +1,12 @@
 import { CommunityBot } from "./community/bot.js";
+import { CaseAdminCounts } from './cases/admin.js';
+import type { PrivateProjection, CaseView } from './cases/store.js';
 import { CaseStore } from "./cases/store.js";
 import { DiscordCases } from "./cases/discord.js";
 import { DiscordPrivateCases } from "./cases/private-discord.js";
 import { PrivateDeliveryWorker } from "./cases/private-delivery.js";
 import { DeliveryWorker } from "./cases/delivery.js";
-import { Client, Events, PermissionFlagsBits, Status, type Message } from "discord.js";
+import { Client, Events, PermissionFlagsBits, Status, type Message, type ThreadChannel } from "discord.js";
 import { loadConfig } from "./config.js";
 import {
   createRuntime,
@@ -14,12 +16,13 @@ import {
 } from "./runtime.js";
 import { createHealthServer } from "./health.js";
 import { Relay, RelayStore, relayRoute } from "./relay/core.js";
-import { relayInput } from "./relay/discord.js";
+import { relayInput, relayNewReport } from "./relay/discord.js";
 import { backfill, GapRecovery } from "./relay/backfill.js";
 
 async function start() {
   const config = loadConfig(process.env);
-  const runtime = createRuntime(config);
+  const adminCounts = config.cases ? new CaseAdminCounts(config.cases.databasePath + '.admin-metrics') : undefined;
+  const runtime = createRuntime(config, () => adminCounts?.rows() ?? []);
   const client = new Client({
     intents: gatewayIntents,
     allowedMentions: { parse: [] },
@@ -64,6 +67,7 @@ async function start() {
           store,
           privateCases,
           runtime.recordPrivateDelivery,
+          relayCaseOpened,
         )
       : undefined;
   const community = config.community
@@ -148,20 +152,47 @@ async function start() {
   const timer = setInterval(() => void tick(), 15000);
   timer.unref();
   const status = (event: string) => console.log(JSON.stringify({ event }));
-  const relayMessage = (message: Message) =>
-    relay && community
-      ? relayInput(message, {
-          guildId: config.guildId,
-          botId: client.user?.id ?? config.applicationId,
-          staffRoleIds: config.cases?.staffRoleIds ?? [],
-          forumId: config.cases?.forumId,
-          privateCaseThread: (id) => !!store?.privateCaseForThread(id),
-          digestMessage: (id) => community.store.isUpdateDigest(id),
-          recordFetch: runtime.relayMetrics.fetch,
-        }).then((input) => {
-          if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
-        })
-      : Promise.resolve();
+  function relayCaseOpened(p: PrivateProjection, c: CaseView) {
+    const first = p.events.find((e) => e.seq === 1 && e.status === 'done');
+    if (!relay || !p.threadId || !first?.externalId) return;
+    const input = {
+      kind: 'case-opened' as const, authorId: 'system', channelId: p.threadId,
+      channelName: `Reports / ${c.category}`,
+      messageLink: `https://discord.com/channels/${config.guildId}/${p.threadId}/${first.externalId}`,
+    };
+    runtime.relayMetrics.event(input.kind, relay.observe(input));
+  }
+  const relayReport = async (thread: ThreadChannel) => {
+    if (!relay) return;
+    const caseId = store?.privateCaseForThread(thread.id);
+    if (caseId && store) {
+      const p = store.privateProjection(caseId);
+      // Backfill can recover an already-synced report made while the gateway was down.
+      if (p?.status === 'ready' && p.projectedVersion > 0) relayCaseOpened(p, store.projection(caseId));
+      return;
+    }
+    const input = await relayNewReport(thread, {
+      guildId: config.guildId,
+      botId: client.user?.id ?? config.applicationId,
+      reportParentId: config.cases?.privateParentId,
+      seen: (id) => relay.reportSeen(id),
+    });
+    if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
+  };
+  const relayMessage = async (message: Message) => {
+    if (!relay || !community) return;
+    if (message.channel.isThread()) await relayReport(message.channel);
+    const input = await relayInput(message, {
+      guildId: config.guildId,
+      botId: client.user?.id ?? config.applicationId,
+      staffRoleIds: config.cases?.staffRoleIds ?? [],
+      forumId: config.cases?.forumId,
+      privateCaseThread: (id) => !!store?.privateCaseForThread(id),
+      digestMessage: (id) => community.store.isUpdateDigest(id),
+      recordFetch: runtime.relayMetrics.fetch,
+    });
+    if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
+  };
   // Discord does not replay what a new gateway session missed: read the gap back over REST.
   const readBack = async (from: number) => {
     const guild = await client.guilds.fetch(config.guildId);
@@ -248,6 +279,10 @@ async function start() {
     }
   });
 
+  client.on(Events.ThreadCreate, (thread) => {
+    void relayReport(thread).catch(() => status("relay_failed"));
+  });
+
   client.on(Events.ThreadUpdate, async (_oldThread, thread) => {
     try {
       if (cases && (await cases.onThreadUpdate(thread))) void tick();
@@ -288,6 +323,7 @@ async function start() {
     clearInterval(relayTimer);
     server.close();
     await client.destroy();
+    adminCounts?.close();
     status("stopped");
   };
   process.once("SIGTERM", () => void shutdown());
