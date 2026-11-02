@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { parseEnv } from 'node:util';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { CaseStore, CaseError } from './cases/store.js';
 import { CaseAdminCounts, executeCaseAdmin } from './cases/admin.js';
@@ -27,7 +27,15 @@ export function dropCaseAdminPrivileges(ops: Pick<NodeJS.Process, 'getuid' | 'se
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+export function isEntry(moduleUrl: string, argv?: string) {
+  try {
+    return !!argv && realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntry(import.meta.url, process.argv[1])) {
   try {
     if (process.argv.length !== 2) throw new CaseError('invalid');
     const input = readFileSync(0, 'utf8');

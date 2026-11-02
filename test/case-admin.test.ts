@@ -143,3 +143,28 @@ test('case-admin CLI executes through release/current symlinks and rejects argum
   assert.equal(viaCurrent.status, direct.status, 'current must execute the same CLI entrypoint as its release');
   assert.deepEqual(JSON.parse(viaCurrent.stdout), JSON.parse(direct.stdout));
 });
+
+test('entry detection resolves both paths and returns false on invalid or missing paths', async t => {
+  const { isEntry } = await import('../src/case-admin.js');
+  const dir = mkdtempSync(join(tmpdir(), 'hk-entry-paths-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const entry = fileURLToPath(new URL('../src/case-admin.ts', import.meta.url));
+  const alias = join(dir, 'entry.ts');
+  symlinkSync(entry, alias);
+  const { pathToFileURL } = await import('node:url');
+  assert.equal(isEntry(pathToFileURL(alias).href, entry), true);
+  assert.equal(isEntry(pathToFileURL(entry).href, alias), true);
+  assert.equal(isEntry(import.meta.url, entry), false);
+  assert.equal(isEntry(pathToFileURL(entry).href, undefined), false);
+  assert.equal(isEntry('https://invalid.test/module.js', entry), false);
+  assert.equal(isEntry(pathToFileURL(entry).href, join(dir, 'missing')), false);
+});
+
+test('importing case-admin with a nonexistent argv path never launches CLI or throws', () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const moduleUrl = new URL('../src/case-admin.ts', import.meta.url).href;
+  const code = `process.argv[1] = '/nonexistent/hearthkeeper-entry-probe'; await import(${JSON.stringify(moduleUrl)}); console.log('imported');`;
+  const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', code], { cwd: root, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), 'imported');
+});
