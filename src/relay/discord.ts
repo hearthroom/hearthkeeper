@@ -98,9 +98,9 @@ export async function relayInput(m: Message, ctx: RelayContext): Promise<RelayIn
  * paths and reconnect backfill call this; the durable thread key handles their races. */
 export async function relayNewReport(
   thread: ThreadChannel,
-  ctx: { guildId: string; botId: string; reportParentId?: string; seen: (id: string) => boolean },
+  ctx: { guildId: string; botId: string; reportParentId?: string; seen: (id: string) => boolean; privateCaseThread?: (id: string) => boolean },
 ): Promise<RelayInput | null> {
-  if (thread.guildId !== ctx.guildId || !ctx.reportParentId || thread.parentId !== ctx.reportParentId || ctx.seen(thread.id))
+  if (thread.guildId !== ctx.guildId || !ctx.reportParentId || thread.parentId !== ctx.reportParentId || ctx.privateCaseThread?.(thread.id) || ctx.seen(thread.id))
     return null;
   const first = [...(await thread.messages.fetch({ after: "0", limit: 1 })).values()][0];
   if (!first || first.system || ![0, 19].includes(first.type)) return null;
@@ -111,4 +111,18 @@ export async function relayNewReport(
     channelName: `${thread.parent?.name ?? "?"} / ${thread.name}`,
     messageLink: link(ctx.guildId, thread.id, first.id),
   };
+}
+
+/** Compose report detection and the existing per-message predicate for gateway and backfill. */
+export async function relayIncomingMessage(m: Message, ctx: RelayContext, deps: {
+  report: (thread: ThreadChannel) => Promise<void>;
+  observe: (input: RelayInput) => void;
+  reportFailed: () => void;
+}) {
+  if (m.channel.isThread()) {
+    try { await deps.report(m.channel); }
+    catch { deps.reportFailed(); }
+  }
+  const input = await relayInput(m, ctx);
+  if (input) deps.observe(input);
 }

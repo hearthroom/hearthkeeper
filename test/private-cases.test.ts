@@ -291,3 +291,27 @@ test('a first successful private sync emits case-opened before acknowledging its
     assert.equal(attempts, 2);
   } finally { f.done(); }
 });
+
+test('an already-synced case is never announced when later replies or status changes sync', async () => {
+  const f = fixture();
+  const tr = transport();
+  try {
+    const c = f.create();
+    // A case completed by the previous release has no new-report key yet.
+    await new PrivateDeliveryWorker(f.store, tr.t).run();
+    assert.equal(f.store.privateProjection(c.id)?.projectedVersion, 1);
+    let announcements = 0;
+    const worker = new PrivateDeliveryWorker(f.store, tr.t, () => {}, () => { announcements++; });
+    let current = f.store.act(staff, c.id, 1, 'claim', '', 'old-case-claim');
+    await worker.run();
+    current = f.store.act(staff, c.id, current.version, 'reply', 'Progress', 'old-case-reply');
+    await worker.run();
+    f.store.act(staff, c.id, current.version, 'wait_technical', 'Investigating', 'old-case-status');
+    await worker.run();
+    assert.equal(announcements, 0);
+    // Reconciliation resets projectedVersion to zero but preserves status=ready.
+    f.store.privateDirty(c.id);
+    await worker.run();
+    assert.equal(announcements, 0, 'repairing a dirty old projection is not a first sync');
+  } finally { f.done(); }
+});

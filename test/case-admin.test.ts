@@ -86,3 +86,39 @@ test('a reused request key rejects different content or authority targets', t =>
   assert.throws(() => run({ ...command, action: 'pass' }), /request_conflict/);
   assert.equal(run({ action: 'show', caseId: c.id }).events.length, 2);
 });
+
+test('root drops supplementary groups before changing gid and uid, and failures stop the sequence', async () => {
+  const { dropCaseAdminPrivileges } = await import('../src/case-admin.js');
+  const order: string[] = [];
+  const ops = { getuid: () => 0,
+    setgroups: (groups: readonly (string | number)[]) => { assert.deepEqual(groups, []); order.push('groups'); },
+    setgid: (id: string | number) => { assert.equal(id, 'hearthkeeper'); order.push('gid'); },
+    setuid: (id: string | number) => { assert.equal(id, 'hearthkeeper'); order.push('uid'); } };
+  dropCaseAdminPrivileges(ops);
+  assert.deepEqual(order, ['groups','gid','uid']);
+  order.length = 0;
+  dropCaseAdminPrivileges({ ...ops, getuid: () => 1000 });
+  assert.deepEqual(order, []);
+  assert.throws(() => dropCaseAdminPrivileges({ ...ops, setgroups: () => { throw new Error('denied'); } }), /denied/);
+  assert.deepEqual(order, []);
+});
+
+test('runCaseAdmin reads runtime-env configuration and exercises guarded SQLite actions across invocations', async t => {
+  const { runCaseAdmin } = await import('../src/case-admin.js');
+  const dir = mkdtempSync(join(tmpdir(), 'hk-admin-cli-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const options = { path: join(dir, 'cases.db'), guildId: '100000000000000002', key: '11'.repeat(32), lookupKey: '22'.repeat(32) };
+  const store = new CaseStore(options);
+  const c = store.create({ guildId: options.guildId, userId: 'reporter', staff: false }, { title: 'Fixture', body: 'Question', category: 'bug', mode: 'identified' }, 'cli-create');
+  store.close();
+  const envText = Object.entries({ DISCORD_TOKEN: 'synthetic-token', DISCORD_APPLICATION_ID: '100000000000000001', DISCORD_GUILD_ID: options.guildId,
+    CASE_FORUM_ID: '100000000000000003', CASE_STAFF_ROLE_IDS: '100000000000000004', CASE_DATABASE_PATH: options.path,
+    CASE_IDENTITY_KEY: options.key, CASE_LOOKUP_KEY: options.lookupKey }).map(([key, value]) => `${key}="${value}"`).join('\n');
+  const command = JSON.stringify({ action: 'reply', caseId: c.id, version: 1, requestKey: 'cli-reply-once', body: 'Formal response' });
+  assert.equal(runCaseAdmin(command, envText).version, 2);
+  assert.equal(runCaseAdmin(command, envText).events.length, 2);
+  assert.equal(runCaseAdmin(JSON.stringify({ action: 'show', caseId: c.id }), envText).version, 2);
+  assert.throws(() => runCaseAdmin(command.replace('cli-reply-once', 'cli-stale-key'), envText), /stale/);
+  assert.throws(() => runCaseAdmin('{', envText));
+  assert.throws(() => runCaseAdmin(JSON.stringify({ action: 'reply', caseId: c.id, version: 2, requestKey: 'no-authority', body: 'Text', staff: true }), envText), /denied/);
+});

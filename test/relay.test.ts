@@ -469,3 +469,53 @@ test("new report adapter reads the first post for bot or player threads in the c
   posts = [{ id: "player-post", type: 0, system: false, author: { id: "player", bot: false } }];
   assert.equal((await relayNewReport(thread({ ownerId: "player" }), ctx))?.kind, "new-report");
 });
+
+test('a failed new-report read still relays the player message through the original predicate', async () => {
+  const { relayIncomingMessage } = await import('../src/relay/discord.js');
+  const observed: string[] = [];
+  let failed = 0;
+  const thread = { id: 'known-case-thread', ownerId: bot, parentId: 'parent', type: 12, parent: { name: 'Reports' }, name: 'Case', isThread: () => true };
+  const message = {
+    id: 'player-message', guildId: guild, channelId: thread.id, channel: thread,
+    author: { id: 'player', bot: false }, type: 0, webhookId: null, system: false,
+    reference: null, mentions: { users: new Map(), roles: new Map() },
+    member: { roles: { cache: new Map() } },
+  } as never;
+  await relayIncomingMessage(message, {
+    guildId: guild, botId: bot, staffRoleIds: [], privateCaseThread: () => true,
+    digestMessage: () => false, recordFetch: () => {},
+  }, {
+    report: async () => { throw new Error('report read failed'); },
+    observe: input => { observed.push(input.kind); },
+    reportFailed: () => { failed++; },
+  });
+  assert.deepEqual(observed, ['case-thread']);
+  assert.equal(failed, 1);
+});
+
+
+test('new messages in known synced case threads do not create a new-report event even without a relay key', async () => {
+  const { relayNewReport, relayIncomingMessage } = await import('../src/relay/discord.js');
+  const observed: string[] = [];
+  let reads = 0;
+  const thread = { id: 'synced-case', guildId: guild, parentId: 'parent', ownerId: bot, type: 12,
+    parent: { name: 'Reports' }, name: 'Old case', isThread: () => true,
+    messages: { fetch: async () => { reads++; throw new Error('must not fetch old report'); } } };
+  const message = { id: 'new-player-message', guildId: guild, channelId: thread.id, channel: thread,
+    author: { id: 'player', bot: false }, type: 0, webhookId: null, system: false,
+    reference: null, mentions: { users: new Map(), roles: new Map() }, member: { roles: { cache: new Map() } } } as never;
+  const knownCase = (id: string) => id === thread.id;
+  await relayIncomingMessage(message, {
+    guildId: guild, botId: bot, staffRoleIds: [], privateCaseThread: knownCase,
+    digestMessage: () => false, recordFetch: () => {},
+  }, {
+    report: async t => {
+      const input = await relayNewReport(t, { guildId: guild, botId: bot, reportParentId: 'parent', seen: () => false, privateCaseThread: knownCase });
+      if (input) observed.push(input.kind);
+    },
+    observe: input => { observed.push(input.kind); },
+    reportFailed: () => { throw new Error('unexpected failure'); },
+  });
+  assert.deepEqual(observed, ['case-thread']);
+  assert.equal(reads, 0);
+});

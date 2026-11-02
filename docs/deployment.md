@@ -230,7 +230,11 @@ gateway 就緒後（含 Discord 換新 session 時的 ShardReady 與伺服器恢
 
 A private report's first verified Discord sync queues one `case-opened` relay event,
 with its first-message link and category only. The relay write completes before the
-projection is acknowledged; retries and reconnect backfill deduplicate by thread.
+projection is acknowledged; retries deduplicate by thread. This callback only runs
+when the previous projected version is zero and the projection has never reached
+ready. Repairing an already-ready projection can reset its version to zero and
+still must not announce it again. Later syncs and reconnect reads of
+already-synced cases never announce them as new reports.
 New threads in the configured private parent without a case mapping use `new-report`.
 `THREAD_CREATE` may arrive before the first post, so `MESSAGE_CREATE` retries the read.
 Thread announcement keys remain after the seven-day event retention period, preventing
@@ -240,7 +244,7 @@ content or member identity is retained in relay events.
 The private operator command is `bin/case-admin` in the exact release. It reads one JSON
 object from stdin and the fixed `/etc/hearthkeeper/runtime.env`; it accepts no environment
 path, database path, identity or arbitrary shell command from the caller. When launched
-by root it reads the protected environment, then drops to the `hearthkeeper` OS account
+by root it reads the protected environment, then clears supplementary groups and drops to the `hearthkeeper` OS account
 before opening SQLite, preserving data-file ownership. It does not call Discord directly;
 the normal delivery workers project accepted actions to the forum and private thread.
 

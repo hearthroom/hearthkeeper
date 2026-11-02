@@ -19,12 +19,20 @@ export function runCaseAdmin(input: string, envText: string) {
   } finally { counts?.close(); store.close(); }
 }
 
+export function dropCaseAdminPrivileges(ops: Pick<NodeJS.Process, 'getuid' | 'setgroups' | 'setgid' | 'setuid'> = process) {
+  if (ops.getuid?.() === 0) {
+    ops.setgroups!([]);
+    ops.setgid!('hearthkeeper');
+    ops.setuid!('hearthkeeper');
+  }
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   try {
     if (process.argv.length !== 2) throw new CaseError('invalid');
     const input = readFileSync(0, 'utf8');
     const envText = readFileSync('/etc/hearthkeeper/runtime.env', 'utf8');
-    if (process.getuid?.() === 0) { process.setgid!('hearthkeeper'); process.setuid!('hearthkeeper'); }
+    dropCaseAdminPrivileges();
     const result = runCaseAdmin(input, envText);
     process.stdout.write(JSON.stringify({ ok: true, result }) + '\n');
   } catch (error) {

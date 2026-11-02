@@ -16,7 +16,7 @@ import {
 } from "./runtime.js";
 import { createHealthServer } from "./health.js";
 import { Relay, RelayStore, relayRoute } from "./relay/core.js";
-import { relayInput, relayNewReport } from "./relay/discord.js";
+import { relayIncomingMessage, relayNewReport } from "./relay/discord.js";
 import { backfill, GapRecovery } from "./relay/backfill.js";
 
 async function start() {
@@ -154,7 +154,7 @@ async function start() {
   const status = (event: string) => console.log(JSON.stringify({ event }));
   function relayCaseOpened(p: PrivateProjection, c: CaseView) {
     const first = p.events.find((e) => e.seq === 1 && e.status === 'done');
-    if (!relay || !p.threadId || !first?.externalId) return;
+    if (!relay || p.projectedVersion !== 0 || p.status === 'ready' || !p.threadId || !first?.externalId) return;
     const input = {
       kind: 'case-opened' as const, authorId: 'system', channelId: p.threadId,
       channelName: `Reports / ${c.category}`,
@@ -164,25 +164,20 @@ async function start() {
   }
   const relayReport = async (thread: ThreadChannel) => {
     if (!relay) return;
-    const caseId = store?.privateCaseForThread(thread.id);
-    if (caseId && store) {
-      const p = store.privateProjection(caseId);
-      // Backfill can recover an already-synced report made while the gateway was down.
-      if (p?.status === 'ready' && p.projectedVersion > 0) relayCaseOpened(p, store.projection(caseId));
-      return;
-    }
+    // Managed cases announce only from their first verified private sync. In
+    // particular, reconnect reads must not announce already-synced legacy cases.
     const input = await relayNewReport(thread, {
       guildId: config.guildId,
       botId: client.user?.id ?? config.applicationId,
       reportParentId: config.cases?.privateParentId,
+      privateCaseThread: (id) => !!store?.privateCaseForThread(id),
       seen: (id) => relay.reportSeen(id),
     });
     if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
   };
   const relayMessage = async (message: Message) => {
     if (!relay || !community) return;
-    if (message.channel.isThread()) await relayReport(message.channel);
-    const input = await relayInput(message, {
+    await relayIncomingMessage(message, {
       guildId: config.guildId,
       botId: client.user?.id ?? config.applicationId,
       staffRoleIds: config.cases?.staffRoleIds ?? [],
@@ -190,8 +185,11 @@ async function start() {
       privateCaseThread: (id) => !!store?.privateCaseForThread(id),
       digestMessage: (id) => community.store.isUpdateDigest(id),
       recordFetch: runtime.relayMetrics.fetch,
+    }, {
+      report: relayReport,
+      observe: (input) => { runtime.relayMetrics.event(input.kind, relay.observe(input)); },
+      reportFailed: () => status('relay_report_failed'),
     });
-    if (input) runtime.relayMetrics.event(input.kind, relay.observe(input));
   };
   // Discord does not replay what a new gateway session missed: read the gap back over REST.
   const readBack = async (from: number) => {

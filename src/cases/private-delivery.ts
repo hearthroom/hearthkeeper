@@ -89,7 +89,7 @@ export class PrivateDeliveryWorker {
           await this.transport.sync(p, c);
           // Keep the projection pending until its durable relay event exists. A crash
           // before this point retries; a crash after enqueue is deduplicated by thread.
-          this.opened(p, c);
+          if (p.projectedVersion === 0 && p.status !== 'ready') this.opened(p, c);
           this.store.privateSynced(c.id, c.version);
           this.observe("success");
         } catch {
