@@ -285,3 +285,11 @@ Deploy the exact pushed source with `npm ci` and `npm run check` in the release,
 `current`, restart, then verify `/readyz`, metrics, a new synthetic report, a guarded support
 action and durable readback. Rollback switches `current` back and restarts, retaining both
 databases and keys. Older releases ignore the sidecar and the additional relay kinds.
+
+
+The case-admin executable resolves its invoked script path before comparing the ESM
+entrypoint URL. The production `current` path is a symlink to a release; comparing an
+unresolved argv path with Node's resolved `import.meta.url` would silently skip the CLI.
+Regression verification launches the actual entrypoint in a child process through the
+same releases/current symlink structure, with invalid arguments that are rejected before
+reading runtime.env or opening any database.

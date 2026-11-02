@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { CaseStore } from '../src/cases/store.js';
 import { executeCaseAdmin, CaseAdminCounts, SUPPORT_ACTOR } from '../src/cases/admin.js';
 
@@ -121,4 +123,23 @@ test('runCaseAdmin reads runtime-env configuration and exercises guarded SQLite 
   assert.throws(() => runCaseAdmin(command.replace('cli-reply-once', 'cli-stale-key'), envText), /stale/);
   assert.throws(() => runCaseAdmin('{', envText));
   assert.throws(() => runCaseAdmin(JSON.stringify({ action: 'reply', caseId: c.id, version: 2, requestKey: 'no-authority', body: 'Text', staff: true }), envText), /denied/);
+});
+
+
+test('case-admin CLI executes through release/current symlinks and rejects arguments before reading runtime.env', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'hk-admin-current-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  mkdirSync(join(dir, 'releases'));
+  symlinkSync(root, join(dir, 'releases', 'candidate'), 'dir');
+  symlinkSync(join(dir, 'releases', 'candidate'), join(dir, 'current'), 'dir');
+  // Invalid argv is rejected before any environment/privilege/database access,
+  // so this remains safe when the suite runs as root on the real host.
+  const run = (script: string) => spawnSync(process.execPath, ['--import', 'tsx', script, '--invalid-argument'], { cwd: root, encoding: 'utf8' });
+  const direct = run(join(root, 'src', 'case-admin.ts'));
+  const viaCurrent = run(join(dir, 'current', 'src', 'case-admin.ts'));
+  assert.equal(direct.status, 1, direct.stderr);
+  assert.deepEqual(JSON.parse(direct.stdout), { ok: false, error: 'invalid' });
+  assert.equal(viaCurrent.status, direct.status, 'current must execute the same CLI entrypoint as its release');
+  assert.deepEqual(JSON.parse(viaCurrent.stdout), JSON.parse(direct.stdout));
 });
