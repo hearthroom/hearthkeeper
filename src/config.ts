@@ -172,6 +172,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     const reviewChannel = env.COMMUNITY_REVIEW_CHANNEL
       ? snowflake("COMMUNITY_REVIEW_CHANNEL")
       : undefined;
+    const listenRaw = env.COMMUNITY_RELAY_LISTEN_CHANNELS?.trim();
+    const relayListenChannels = listenRaw ? listenRaw.split(",").map((s) => s.trim()) : [];
+    if (relayListenChannels.some((id) => !/^\d{17,20}$/.test(id)) || new Set(relayListenChannels).size !== relayListenChannels.length)
+      throw new Error("Invalid COMMUNITY_RELAY_LISTEN_CHANNELS");
     const updates = parseUpdateChannels(env.COMMUNITY_UPDATES_CHANNELS);
     // Update digests are public posts: they may never land in a staff-only or private destination.
     if (
@@ -187,6 +191,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     community = {
       reviewV2:env.COMMUNITY_REVIEW_V2==='true',
       relay:env.COMMUNITY_RELAY==='true',
+      relayListenChannels,
       reviewLocale:reviewLocale as ReviewLocale,
       site: site.origin,
       key,

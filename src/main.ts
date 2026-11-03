@@ -182,6 +182,7 @@ async function start() {
       botId: client.user?.id ?? config.applicationId,
       staffRoleIds: config.cases?.staffRoleIds ?? [],
       forumId: config.cases?.forumId,
+      listenChannelIds: config.community?.relayListenChannels,
       privateCaseThread: (id) => !!store?.privateCaseForThread(id),
       digestMessage: (id) => community.store.isUpdateDigest(id),
       recordFetch: runtime.relayMetrics.fetch,

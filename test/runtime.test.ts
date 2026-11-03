@@ -299,3 +299,10 @@ test('case-admin metrics publish durable totals on every scrape with bounded lab
   totals = [{ action: 'reply', outcome: 'success', total: 3 }];
   assert.match(await runtime.metrics(), /hearthkeeper_case_admin_total\{action="reply",outcome="success"\} 3/);
 });
+
+
+test("full-listen relay metrics keep the new kind in a bounded label", async () => {
+  const runtime = createRuntime(loadConfig(env));
+  runtime.relayMetrics.event("channel-listen", "queued");
+  assert.match(await runtime.metrics(), /hearthkeeper_relay_events_total\{kind="channel-listen",outcome="queued"\} 1/);
+});

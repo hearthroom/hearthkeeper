@@ -204,7 +204,7 @@ Bot 只記中繼資料：種類（mention／reply／case-thread）、頻道名�
 私人討論串裡員工的發言不轉。Bot 不對觸發訊息做任何回覆。
 
 同一作者在同一頻道的連續發言併成一筆：最後一則後 10 秒沒有新訊息才交出（最長 30 秒）。每位作者每小時
-最多 6 筆、全伺服器每小時最多 60 筆，超過的只計數，下一筆帶 `suppressed`。事件保留 7 天。
+最多 6 筆、全伺服器每小時最多 60 筆，超過的存入持久佇列，到下一個可用時段才送出，並累加限流告警總數。已送事件保留 7 天，待送佇列保留至交付。
 
 讀取只走 loopback：`GET 127.0.0.1:<METRICS_PORT>/relay/events?after=<seq>&wait=<0-25>`。有新事件立刻回，
 沒有就最多等 `wait` 秒回空陣列。回應帶 `streamId`（資料表重建會變）、`latestSeq`、`gap`（游標早於
@@ -293,3 +293,27 @@ unresolved argv path with Node's resolved `import.meta.url` would silently skip 
 Regression verification launches the actual entrypoint in a child process through the
 same releases/current symlink structure, with invalid arguments that are rejected before
 reading runtime.env or opening any database.
+
+## Relay replies and full-channel listening
+
+Mentions and replies to the bot are relayed in every readable channel and thread,
+including staff case areas. Unaddressed staff chatter keeps its existing exclusion.
+Set `COMMUNITY_RELAY_LISTEN_CHANNELS` to an explicit comma-separated list of channel
+IDs to relay all ordinary member posts there. The default is empty; malformed or
+duplicate entries reject startup. These events use `kind="channel-listen"`, retain
+reply references, and bypass both hourly mention limits without consuming them.
+Bot, webhook, system, and foreign-guild messages remain excluded.
+
+The loopback relay response includes `rateLimitedTotal`, a durable monotonically
+increasing aggregate within the stream. It increases whenever the normal relay
+limits defer a message, including when no subsequent event is accepted. Consumers
+must warn about an increase and only persist the acknowledged count after the
+operator inbox accepts it; count acknowledgements reset on stream changes.
+The new `relay_deferred` table stores only event metadata and its due time, never author identity or content. It is promoted to a sequenced event only when due, so immediate full-listen traffic can pass it without skipping a cursor. Enqueue plus dedup and promotion plus deletion are transactional. Pending metrics include deferred items. Gateway gaps and retention gaps retain the existing backfill and warning protocol.
+No new public HTTP/MCP surface is introduced.
+
+Check `hearthkeeper_relay_events_total{kind="channel-listen",outcome="queued"}`,
+`hearthkeeper_relay_events_total{outcome="rate_limited"}`, and
+`hearthkeeper_relay_backfill_total{outcome="complete"}` on `/metrics`, then verify
+the local operator inbox and that `hearthkeeper_relay_pending_events` returns to zero.
+The kind/outcome labels are fixed enums; no channel/member identity or content is added.

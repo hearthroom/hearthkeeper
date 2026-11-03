@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 // Only metadata leaves this process: links, channel, kind, counts. Never content, never who wrote it;
 // the author ID lives only in the in-memory coalescing and rate-limit tables below.
 
-export type RelayKind = "mention" | "reply" | "case-thread" | "new-report" | "case-opened";
+export type RelayKind = "mention" | "reply" | "case-thread" | "new-report" | "case-opened" | "channel-listen";
 
 export interface RelayFacts {
   guildId: string | null;
@@ -19,6 +19,7 @@ export interface RelayFacts {
   privateCaseThread: boolean;
   forumThread: boolean;
   authorStaff: boolean;
+  listenAll?: boolean;
 }
 
 export function relayKind(f: RelayFacts, guild: string): RelayKind | null {
@@ -27,15 +28,13 @@ export function relayKind(f: RelayFacts, guild: string): RelayKind | null {
     f.author.bot ||
     f.webhookId ||
     f.system ||
-    ![0, 19].includes(f.type) ||
-    // The case forum is the staff work area; staff messages there already drive the case workflow.
-    f.forumThread
+    ![0, 19].includes(f.type)
   )
     return null;
-  // Staff in a private report thread are the ones handling it.
-  if (f.privateCaseThread && f.authorStaff) return null;
+  if (f.listenAll) return "channel-listen";
   if (f.repliedAuthorId === f.botId) return "reply";
   if (f.mentionsBot) return "mention";
+  if (f.forumThread || (f.privateCaseThread && f.authorStaff)) return null;
   if (f.privateCaseThread) return "case-thread";
   return null;
 }
@@ -99,7 +98,8 @@ export class RelayStore {
     db.exec(`CREATE TABLE IF NOT EXISTS relay_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,channel_id TEXT NOT NULL,channel_name TEXT NOT NULL,first_message TEXT NOT NULL,last_message TEXT NOT NULL,count INTEGER NOT NULL,suppressed INTEGER NOT NULL,reply_to TEXT,reply_to_digest INTEGER NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS relay_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS relay_gaps(started_at INTEGER PRIMARY KEY,ended_at INTEGER,recovered INTEGER NOT NULL DEFAULT 0);
- CREATE TABLE IF NOT EXISTS relay_seen(link TEXT PRIMARY KEY,at INTEGER NOT NULL);`);
+ CREATE TABLE IF NOT EXISTS relay_seen(link TEXT PRIMARY KEY,at INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS relay_deferred(link TEXT PRIMARY KEY,payload TEXT NOT NULL,created_at INTEGER NOT NULL,due_at INTEGER NOT NULL);`);
     // Added after the first release: older databases lack the column.
     if (!(db.prepare("SELECT 1 FROM pragma_table_info('relay_gaps') WHERE name='recovered'").get()))
       db.exec("ALTER TABLE relay_gaps ADD COLUMN recovered INTEGER NOT NULL DEFAULT 0");
@@ -130,6 +130,29 @@ export class RelayStore {
           | undefined
       )?.seq ?? 0,
     );
+  }
+  transaction<T>(work: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = work();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  defer(e: Omit<RelayInput, "authorId">, now: number, due: number) {
+    this.db.prepare("INSERT INTO relay_deferred VALUES(?,?,?,?)").run(e.messageLink, JSON.stringify(e), now, due);
+  }
+  releaseDue(now: number) {
+    this.transaction(() => {
+      const rows = this.db.prepare("SELECT link,payload FROM relay_deferred WHERE due_at<=? ORDER BY due_at,created_at,rowid LIMIT 50").all(now) as {link: string; payload: string}[];
+      for (const row of rows) {
+        this.create(JSON.parse(row.payload) as Omit<RelayInput, "authorId">, 0, now);
+        this.db.prepare("DELETE FROM relay_deferred WHERE link=?").run(row.link);
+      }
+    });
   }
   /** Records a message as relayed; false when the gateway or a backfill already did. */
   firstSight(link: string, now: number) {
@@ -190,7 +213,7 @@ export class RelayStore {
   }
   stats(now: number) {
     const r = this.db
-      .prepare("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM relay_events WHERE seq>?")
+      .prepare("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM (SELECT created_at FROM relay_events WHERE seq>? UNION ALL SELECT created_at FROM relay_deferred)")
       .get(this.metaNumber("acked")) as { n: number; oldest: number | null };
     return { pending: r.n, oldestAgeMs: r.oldest === null ? 0 : Math.max(0, now - r.oldest) };
   }
@@ -202,7 +225,14 @@ export class RelayStore {
     if (last.seq !== null) this.raise("pruned", last.seq);
     this.db.prepare("DELETE FROM relay_events WHERE created_at<?").run(cut);
     this.db.prepare("DELETE FROM relay_gaps WHERE ended_at IS NOT NULL AND ended_at<?").run(cut);
-    this.db.prepare("DELETE FROM relay_seen WHERE at<? AND link NOT LIKE 'new-report:%'").run(cut);
+    this.db.prepare("DELETE FROM relay_seen WHERE at<? AND link NOT LIKE 'new-report:%' AND link NOT IN (SELECT link FROM relay_deferred)").run(cut);
+  }
+  // Durable aggregate: a quiet hour or process restart must not hide dropped notifications.
+  noteRateLimited() {
+    this.raise("rate_limited_total", this.rateLimitedTotal() + 1);
+  }
+  rateLimitedTotal() {
+    return this.metaNumber("rate_limited_total");
   }
   heartbeat(now: number) {
     this.db.prepare("INSERT OR REPLACE INTO relay_meta VALUES('heartbeat',?)").run(String(now));
@@ -259,7 +289,6 @@ export class Relay {
   private groups = new Map<string, { seq: number; at: number }>();
   private authors = new Map<string, number[]>();
   private global: number[] = [];
-  private suppressed = 0;
   private o: Required<RelayOptions>;
   constructor(
     private store: RelayStore,
@@ -288,6 +317,9 @@ export class Relay {
       const { authorId: _author, ...event } = e;
       return this.store.queueReport(event, now) ? "queued" : "duplicate";
     }
+    return this.store.transaction(() => this.observeMessage(e, now));
+  }
+  private observeMessage(e: RelayInput, now: number): "queued" | "coalesced" | "rate_limited" | "duplicate" {
     if (!this.store.firstSight(e.messageLink, now)) return "duplicate";
     this.forget(now);
     const key = e.authorId + ":" + e.channelId;
@@ -296,17 +328,30 @@ export class Relay {
       group.at = now;
       return "coalesced";
     }
+    const fullListen = e.kind === "channel-listen";
     const mine = this.authors.get(e.authorId) ?? [];
-    if (mine.length >= this.o.perAuthorHour || this.global.length >= this.o.globalHour) {
-      this.suppressed++;
+    // Reserve the next slot in both sliding windows, including already-deferred reservations.
+    // Only metadata is durable; author identities stay in memory as before.
+    const due = fullListen ? now : Math.max(now,
+      mine.length >= this.o.perAuthorHour ? mine[mine.length - this.o.perAuthorHour]! + HOUR : now,
+      this.global.length >= this.o.globalHour ? this.global[this.global.length - this.o.globalHour]! + HOUR : now);
+    const { authorId: _author, ...event } = e;
+    if (due > now) {
+      this.store.defer(event, now, due);
+      this.store.noteRateLimited();
+      mine.push(due);
+      this.authors.set(e.authorId, mine);
+      this.global.push(due);
+      this.global.sort((a, b) => a - b);
       return "rate_limited";
     }
-    const { authorId: _author, ...event } = e;
-    const seq = this.store.create(event, this.suppressed, now);
-    this.suppressed = 0;
-    mine.push(now);
-    this.authors.set(e.authorId, mine);
-    this.global.push(now);
+    const seq = this.store.create(event, 0, now);
+    if (!fullListen) {
+      mine.push(now);
+      this.authors.set(e.authorId, mine);
+      this.global.push(now);
+      this.global.sort((a, b) => a - b);
+    }
     this.groups.set(key, { seq, at: now });
     return "queued";
   }
@@ -321,11 +366,13 @@ export class Relay {
     for (const [k, v] of this.groups) if (v.at <= now - this.o.coalesceMs) this.groups.delete(k);
   }
   async events(after: number, waitSeconds: number) {
+    this.store.releaseDue(this.o.now());
     this.store.ack(after);
     const start = this.o.now();
     let events = this.store.page(after, start, this.o.settleMs, this.o.holdMaxMs);
     while (!events.length && this.o.now() - start < waitSeconds * 1000) {
       await this.o.sleep(1000);
+      this.store.releaseDue(this.o.now());
       events = this.store.page(after, this.o.now(), this.o.settleMs, this.o.holdMaxMs);
     }
     return {
@@ -335,6 +382,7 @@ export class Relay {
       gatewayReady: this.o.gatewayReady(),
       gap: this.store.gap(after),
       gatewayGaps: this.store.gatewayGaps(),
+      rateLimitedTotal: this.store.rateLimitedTotal(),
       events,
     };
   }

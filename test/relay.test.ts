@@ -44,7 +44,7 @@ test("relay triggers on a direct mention, a reply to the bot, and a reporter in 
   assert.equal(relayKind(facts({ privateCaseThread: true }), guild), "case-thread");
 });
 
-test("relay ignores bots, webhooks, system posts, other guilds, staff work areas and plain chatter", () => {
+test("relay ignores bots, webhooks, system posts, other guilds, staff chatter and plain chatter", () => {
   assert.equal(relayKind(facts(), guild), null);
   assert.equal(
     relayKind(facts({ type: 19, repliedAuthorId: "300000000000000001" }), guild),
@@ -57,8 +57,7 @@ test("relay ignores bots, webhooks, system posts, other guilds, staff work areas
     { system: true },
     { type: 7 },
     { guildId: "600000000000000001" },
-    { forumThread: true },
-    { privateCaseThread: true, authorStaff: true, mentionsBot: true },
+
   ] as Partial<RelayFacts>[])
     assert.equal(relayKind(facts({ mentionsBot: true, ...over }), guild), null, JSON.stringify(over));
 });
@@ -142,7 +141,7 @@ test("events are handed out in order without skipping one that is still settling
   assert.equal(r.latestSeq, 3);
 });
 
-test("one person and the whole server are rate limited, and the next event says how many were held back", async () => {
+test("one person and the whole server are rate limited with a durable deferred count", async () => {
   const { relay, tick } = setup();
   const outcomes = [];
   for (let i = 0; i < 8; i++) {
@@ -155,7 +154,8 @@ test("one person and the whole server are rate limited, and the next event says 
   relay.observe(input({ authorId: "200000000000000009" }));
   tick(11_000);
   const r = await relay.events(0, 0);
-  assert.equal(r.events.at(-1)!.suppressed, 2);
+  assert.equal(r.rateLimitedTotal, 2);
+  assert.ok(r.events.every(e => e.suppressed === 0), "new limits defer rather than drop messages");
 
   const g = setup();
   let limited = 0;
@@ -355,7 +355,7 @@ test("the Discord adapter reads only metadata and resolves replies with at most 
   assert.equal(c?.kind, "case-thread");
   assert.equal(c?.channelName, "回报 / hk-pending-x");
   const staff = { roles: { cache: new Map([["900000000000000001", {}]]) } };
-  assert.equal(await relayInput(msg({ channel: thread({}), member: staff, mentions: mentioned }), ctx), null);
+  assert.equal((await relayInput(msg({ channel: thread({}), member: staff, mentions: mentioned }), ctx))?.kind, "mention");
   const restGuild = {
     members: { me: null, fetch: async () => staff },
   };
@@ -365,17 +365,17 @@ test("the Discord adapter reads only metadata and resolves replies with at most 
     "a staff member read back without member data is still recognised",
   );
   assert.equal(
-    await relayInput(msg({ channel: thread({ type: ChannelType.PublicThread, parentId: ctx.forumId }), mentions: mentioned }), ctx),
-    null,
+    (await relayInput(msg({ channel: thread({ type: ChannelType.PublicThread, parentId: ctx.forumId }), mentions: mentioned }), ctx))?.kind,
+    "mention",
   );
   assert.equal(await relayInput(msg({ author: { id: bot, bot: true }, mentions: mentioned }), ctx), null);
   assert.equal(await relayInput(msg(), ctx), null);
 });
 
-test("staff replying to the bot inside a private case thread is not relayed", () => {
+test("staff replying to the bot inside a private case thread is relayed", () => {
   assert.equal(
     relayKind(facts({ type: 19, repliedAuthorId: bot, privateCaseThread: true, authorStaff: true }), guild),
-    null,
+    "reply",
   );
   assert.equal(
     relayKind(facts({ type: 19, repliedAuthorId: bot, privateCaseThread: true }), guild),
@@ -518,4 +518,114 @@ test('new messages in known synced case threads do not create a new-report event
   });
   assert.deepEqual(observed, ['case-thread']);
   assert.equal(reads, 0);
+});
+
+
+test("bot replies relay in staff forums and private case threads, with or without a mention", () => {
+  for (const scope of [{ forumThread: true }, { privateCaseThread: true, authorStaff: true }]) {
+    for (const mentionsBot of [true, false])
+      assert.equal(relayKind(facts({ ...scope, type: 19, repliedAuthorId: bot, mentionsBot }), guild), "reply");
+    assert.equal(relayKind(facts({ ...scope, mentionsBot: true }), guild), "mention");
+    assert.equal(relayKind(facts(scope), guild), null);
+  }
+});
+
+test("configured full-listen channels relay chatter without spending the mention allowance", async () => {
+  const { relayInput } = await import("../src/relay/discord.js");
+  const ctx = { guildId: guild, botId: bot, staffRoleIds: [], listenChannelIds: ["full"],
+    privateCaseThread: () => false, digestMessage: () => false, recordFetch: () => {} };
+  const message = (channelId = "full", over = {}) => ({
+    id: "940000000000000100", channelId, guildId: guild, author: { id: "member", bot: false },
+    type: 0, system: false, webhookId: null, reference: null,
+    mentions: { users: new Map(), roles: new Map(), repliedUser: null },
+    channel: { name: "Internal", isThread: () => false }, ...over,
+  }) as never;
+  const accepted = await relayInput(message(), ctx);
+  assert.equal(accepted?.kind, "channel-listen");
+  assert.equal(await relayInput(message("other"), ctx), null);
+  assert.equal(await relayInput(message("full", { author: { id: bot, bot: true } }), ctx), null);
+  const s = setup({ perAuthorHour: 1, globalHour: 1 });
+  for (let i = 0; i < 8; i++) {
+    assert.equal(s.relay.observe({ ...accepted!, messageLink: `full-${i}` }), "queued");
+    s.tick(11_000);
+    await s.relay.events(0, 0);
+  }
+  assert.equal(s.relay.observe(input()), "queued", "full listening leaves the ordinary allowance untouched");
+  assert.equal(s.relay.observe(input({ authorId: "other", channelId: "other" })), "rate_limited");
+});
+
+test("rate limiting is visible without a later successful event and survives a restart", async () => {
+  const { relay, store, tick } = setup({ perAuthorHour: 1 });
+  relay.observe(input());
+  tick(11_000);
+  await relay.events(0, 0);
+  assert.equal(relay.observe(input({ kind: "reply" })), "rate_limited");
+  const response = await relay.events(1, 0);
+  assert.equal(response.events.length, 0);
+  assert.equal(response.rateLimitedTotal, 1);
+  const restarted = new Relay(store, { now: () => 2_000_000, sleep: async () => {}, gatewayReady: () => true });
+  assert.equal((await restarted.events(1, 0)).rateLimitedTotal, 1);
+});
+
+test("limited replies wait in durable storage and are delivered after the allowance resets", async () => {
+  const { relay, store, tick, at } = setup({ perAuthorHour: 1 });
+  relay.observe(input());
+  tick(11_000);
+  await relay.events(0, 0);
+  const deferred = input({kind: 'reply', messageLink: 'https://discord.com/channels/g/c/deferred', replyTo: 'https://discord.com/channels/g/c/bot'});
+  assert.equal(relay.observe(deferred), 'rate_limited');
+  assert.equal(store.stats(at()).pending, 2, 'deferred messages count in the pending backlog');
+  assert.equal((await relay.events(1, 0)).events.length, 0);
+  const restarted = new Relay(store, {now: at, sleep: async () => {}, gatewayReady: () => true});
+  assert.equal(restarted.observe(deferred), 'duplicate', 'a retry cannot enqueue the same deferred message twice');
+  tick(3_600_000);
+  let page = await restarted.events(1, 0);
+  tick(11_000);
+  page = await restarted.events(1, 0);
+  assert.equal(page.events.length, 1);
+  assert.equal(page.events[0]?.kind, 'reply');
+  assert.equal(page.events[0]?.lastMessage, deferred.messageLink);
+  assert.equal(page.events[0]?.replyTo, deferred.replyTo);
+  assert.equal((await restarted.events(page.events[0]!.seq, 0)).events.length, 0);
+  assert.equal(store.stats(at()).pending, 0);
+});
+
+test("full listening bypasses a deferred reply without cursor-skipping it", async () => {
+  const s = setup({perAuthorHour: 1});
+  s.relay.observe(input());
+  s.tick(11_000);
+  await s.relay.events(0, 0);
+  s.relay.observe(input({kind: 'reply', messageLink: 'deferred-reply'}));
+  s.relay.observe(input({kind: 'channel-listen', channelId: 'full', messageLink: 'full-now'}));
+  s.tick(11_000);
+  const immediate = await s.relay.events(1, 0);
+  assert.equal(immediate.events[0]?.lastMessage, 'full-now');
+  s.tick(3_600_000);
+  await s.relay.events(immediate.events[0]!.seq, 0);
+  s.tick(11_000);
+  const later = await s.relay.events(immediate.events[0]!.seq, 0);
+  assert.equal(later.events[0]?.lastMessage, 'deferred-reply');
+});
+
+test("storage failures roll back dedup, and deferred metadata contains no author identity", async () => {
+  const db = new DatabaseSync(":memory:");
+  const store = new RelayStore(db);
+  let now = 1_000_000;
+  const relay = new Relay(store, { now: () => now, sleep: async () => {}, gatewayReady: () => true, perAuthorHour: 1 });
+  const first = input();
+  db.exec("CREATE TRIGGER fail_event BEFORE INSERT ON relay_events BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;");
+  assert.throws(() => relay.observe(first));
+  db.exec("DROP TRIGGER fail_event");
+  assert.equal(relay.observe(first), 'queued');
+  now += 11_000;
+  await relay.events(0, 0);
+  const deferred = input({messageLink: 'durable-deferred'});
+  db.exec("CREATE TRIGGER fail_defer BEFORE INSERT ON relay_deferred BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;");
+  assert.throws(() => relay.observe(deferred));
+  db.exec("DROP TRIGGER fail_defer");
+  assert.equal(relay.observe(deferred), 'rate_limited');
+  const rows = db.prepare('SELECT * FROM relay_deferred').all();
+  assert.equal(rows.length, 1);
+  assert.ok(!JSON.stringify(rows).includes(deferred.authorId));
+  assert.equal(store.rateLimitedTotal(), 1);
 });

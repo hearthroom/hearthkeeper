@@ -324,7 +324,7 @@ export function createRuntime(config: Config, adminCounts: () => AdminCount[] = 
       health(count:number,oldest:number|null){reviewPending.set(count);reviewOldest.set(oldest===null?0:Math.max(0,(Date.now()-oldest)/1000));reviewHealth.set(Date.now()/1000);},
     },
     relayMetrics:{
-      event(kind:string,outcome:string){relayEvents.inc({kind:['mention','reply','case-thread','new-report','case-opened'].includes(kind)?kind:'mention',outcome:['queued','coalesced','rate_limited','duplicate'].includes(outcome)?outcome:'queued'});},
+      event(kind:string,outcome:string){relayEvents.inc({kind:['mention','reply','case-thread','new-report','case-opened','channel-listen'].includes(kind)?kind:'mention',outcome:['queued','coalesced','rate_limited','duplicate'].includes(outcome)?outcome:'queued'});},
       backfill(outcome:'complete'|'partial'|'failed'){relayBackfill.inc({outcome});},
       fetch(outcome:'success'|'failure'){relayFetch.inc({outcome});},
       pulled(pending:number,oldestAgeMs:number){relayPending.set(pending);relayOldest.set(oldestAgeMs/1000);relayPull.set(Date.now()/1000);},

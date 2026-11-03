@@ -29,6 +29,7 @@ export interface CommunityConfig {
   reviewV2?: boolean;
   /** Hand @-mentions and replies to the bot to the operators' machine (metadata only). */
   relay?: boolean;
+  relayListenChannels?: string[];
   reviewLocale?: ReviewLocale;
   /** Public announcement channel per language for the daily update digest; absent turns digests off. */
   updates?: UpdateChannels;

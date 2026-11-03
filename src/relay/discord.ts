@@ -6,6 +6,7 @@ export interface RelayContext {
   botId: string;
   staffRoleIds: string[];
   forumId?: string;
+  listenChannelIds?: string[];
   privateCaseThread: (threadId: string) => boolean;
   /** Whether a bot message is one of its daily update digests. */
   digestMessage: (messageId: string) => boolean;
@@ -71,6 +72,7 @@ export async function relayInput(m: Message, ctx: RelayContext): Promise<RelayIn
       privateCaseThread,
       forumThread,
       authorStaff,
+      listenAll: ctx.listenChannelIds?.includes(m.channelId) ?? false,
     },
     ctx.guildId,
   );
@@ -87,7 +89,7 @@ export async function relayInput(m: Message, ctx: RelayContext): Promise<RelayIn
     channelId: m.channelId,
     channelName,
     messageLink: link(ctx.guildId, m.channelId, m.id),
-    ...(kind === "reply" && ref
+    ...(repliedAuthorId === ctx.botId && ref
       ? { replyTo: link(ctx.guildId, m.channelId, ref), replyToDigest: ctx.digestMessage(ref) }
       : {}),
   };
