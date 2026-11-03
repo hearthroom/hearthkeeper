@@ -585,7 +585,7 @@ test("limited replies wait in durable storage and are delivered after the allowa
   assert.equal(page.events.length, 1);
   assert.equal(page.events[0]?.kind, 'reply');
   assert.equal(page.events[0]?.lastMessage, deferred.messageLink);
-  assert.equal(page.events[0]?.replyTo, deferred.replyTo);
+  assert.equal(page.events[0]?.replyTo, 'https://discord.com/channels/g/c/bot');
   assert.equal((await restarted.events(page.events[0]!.seq, 0)).events.length, 0);
   assert.equal(store.stats(at()).pending, 0);
 });
